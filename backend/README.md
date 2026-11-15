@@ -28,6 +28,51 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+## Database configuration
+
+The backend uses PostgreSQL via SQLAlchemy 2.x and the `psycopg2` driver.
+The connection string is read from the `DATABASE_URL` environment variable.
+Never commit real credentials to the repository.
+
+URL format:
+
+```
+postgresql://<user>:<password>@<host>:<port>/<database>
+```
+
+Set the variable before starting the server:
+
+```bash
+# macOS / Linux
+export DATABASE_URL="postgresql://<user>:<password>@localhost:5432/clipforge"
+
+# Windows (PowerShell)
+$env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/clipforge"
+```
+
+The database layer lives in:
+
+- `app/config.py` — reads `DATABASE_URL` from the environment.
+- `app/database.py` — declarative `Base` for models, engine and session
+  factory creation, and the `get_db` FastAPI dependency.
+
+The engine is created lazily on first use, so the server starts and `/health`
+responds even when `DATABASE_URL` is not set or PostgreSQL is not running.
+Routes that need the database should depend on `get_db`, which provides a
+session and closes it once the request finishes:
+
+```python
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+
+
+@app.get("/example")
+def example(db: Session = Depends(get_db)):
+    ...
+```
+
 ## Running the server
 
 ```bash
@@ -47,3 +92,6 @@ The API is served at `http://127.0.0.1:8000`. Interactive docs are available at 
 ```bash
 pytest
 ```
+
+The tests use an in-memory SQLite database and do not require PostgreSQL or
+`DATABASE_URL` to be set.
