@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import { SessionProvider } from "@/components/session/session-provider";
+import { UserMenu } from "@/components/session/user-menu";
 import { SiteHeader } from "@/components/site-header";
 import { PRODUCT_DESCRIPTION, PRODUCT_NAME } from "@/lib/site";
 
@@ -21,10 +23,12 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         >
           Skip to main content
         </a>
-        <SiteHeader />
-        <main id="main-content" className="flex flex-1 flex-col">
-          {children}
-        </main>
+        <SessionProvider>
+          <SiteHeader actions={<UserMenu />} />
+          <main id="main-content" className="flex flex-1 flex-col">
+            {children}
+          </main>
+        </SessionProvider>
       </body>
     </html>
   );

@@ -106,10 +106,13 @@ current suite", so the setup file does not register hooks itself.
 ```text
 src/
   app/          Routes (App Router): root layout, landing page, /login,
-                /register, the /dashboard placeholder, and the shared
-                loading, error, and not-found states
+                /register, the protected /dashboard placeholder and
+                /settings/profile, and the shared loading, error, and
+                not-found states
   components/   Reusable UI components (Button, Container, SiteHeader,
-                StatusMessage, TextField) and the auth forms in auth/
+                StatusMessage, TextField), the auth forms in auth/, the
+                session provider, protected layout and user menu in
+                session/, and the profile forms in profile/
   lib/          Shared constants, the API client (lib/api), and form
                 validation (lib/validation)
 ```
@@ -152,8 +155,40 @@ Tests sit next to the code they cover as `*.test.tsx`.
   status `401` and the caller decides what to show. This keeps `/login` free
   of redirect loops.
 
-Limitations: `/dashboard` is a placeholder that does not check the session
-(the backend has no "current user" endpoint yet), so it does not redirect
-logged-out visitors. The login and register pages do not redirect users who
-are already logged in. There is no logout control in the UI yet; `logout()`
-is available for it.
+## Session and protected pages
+
+- `src/lib/api/users.ts` — `getCurrentUser` (`GET /api/v1/users/me`),
+  `updateProfile` (`PATCH /api/v1/users/me`, `full_name` only), and
+  `changePassword` (`POST /api/v1/users/me/password`; the new token in the
+  response is discarded, the backend replaces the cookie).
+- `SessionProvider` (`src/components/session/session-provider.tsx`) wraps the
+  app in the root layout. `useCurrentUser()` returns `user`, `loading`,
+  `error` (a non-401 failure such as an unreachable API), `refresh`, `setUser`,
+  and `clear`. Only the public user is kept in memory. Each `refresh()` starts
+  a new request and only the latest response is applied, so a check started
+  before login or logout can never overwrite the newer state.
+- `AuthenticatedLayout` protects `/dashboard` and `/settings/*` through their
+  `layout.tsx` files. It re-checks the session when it mounts and shows only a
+  loading state until the check finishes, so protected content never flashes.
+  A `401` redirects to `/login`; other failures show an error with a retry
+  button instead of logging the user out.
+- The header shows the user's name (or email, linking to `/settings/profile`)
+  and a **Log out** button. Logout calls `POST /api/v1/auth/logout` (which
+  clears the HttpOnly cookie), then clears the client session and redirects
+  to `/login`. If the request fails, the user stays logged in and the error
+  is shown, because the cookie may still be set.
+- `/settings/profile` updates `full_name` (trimmed; blank clears it; at most
+  255 characters) and changes the password (current password, plus a new
+  password of 8–256 characters entered twice). Both forms announce success
+  and backend errors, such as "The current password is incorrect.".
+
+Requests are credentialed (`credentials: "include"`), so the frontend origin
+must be listed in the backend's `CORS_ORIGINS` (see "Connecting to the
+backend"); otherwise logout and profile changes get `403 csrf_failed`.
+
+Limitations: the session check runs in the browser, so protected pages are
+not checked during server rendering (the server only sends the loading
+state; all data comes from the authenticated API). `/dashboard` and
+`/settings` each have their own `layout.tsx` instead of a shared `(app)`
+route group, so moving between them re-checks the session. The login and
+register pages do not redirect users who are already logged in.
