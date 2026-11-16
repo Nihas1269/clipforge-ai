@@ -75,8 +75,8 @@ def test_get_engine_uses_database_url_from_environment(monkeypatch):
 
     engine = database.get_engine()
     try:
-        # Compare parsed components: newer SQLAlchemy versions percent-encode
-        # ":" when rendering the URL ("sqlite:///%3Amemory%3A").
+        # Compare parsed URLs: newer SQLAlchemy versions percent-encode ":" in
+        # the database component when rendering, e.g. "sqlite:///%3Amemory%3A".
         assert engine.url == make_url(SQLITE_IN_MEMORY_URL)
         assert engine.url.drivername == "sqlite"
         assert engine.url.database == ":memory:"

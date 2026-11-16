@@ -387,6 +387,64 @@ def test_downgrade_of_processing_jobs_migration_keeps_auth_tokens(database_url, 
     assert "auth_tokens" in table_names
 
 
+def test_upgrade_creates_pending_storage_deletions_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("pending_storage_deletions")
+    }
+    assert set(columns) == {
+        "id",
+        "storage_key",
+        "attempts",
+        "last_error_type",
+        "created_at",
+        "last_attempt_at",
+    }
+    for name in ("storage_key", "attempts", "created_at"):
+        assert columns[name]["nullable"] is False, name
+    for name in ("last_error_type", "last_attempt_at"):
+        assert columns[name]["nullable"] is True, name
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO pending_storage_deletions (id, storage_key) "
+                "VALUES (:id, 'users/u/videos/v/source.mp4')"
+            ),
+            {"id": uuid.uuid4().hex},
+        )
+        row = connection.execute(
+            text("SELECT attempts, created_at FROM pending_storage_deletions")
+        ).one()
+    assert row.attempts == 0
+    assert row.created_at is not None
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO pending_storage_deletions (id, storage_key, attempts) "
+                    "VALUES (:id, 'k', -1)"
+                ),
+                {"id": uuid.uuid4().hex},
+            )
+
+
+def test_downgrade_of_pending_storage_deletions_keeps_processing_jobs(
+    database_url, engine
+):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0004")
+
+    table_names = inspect(engine).get_table_names()
+    assert "pending_storage_deletions" not in table_names
+    assert "processing_jobs" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 
