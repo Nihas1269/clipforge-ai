@@ -79,7 +79,9 @@ def sanitize_filename(raw: str | None, max_length: int = FILENAME_MAX_LENGTH) ->
         return ""
     if len(name) > max_length:
         stem, dot, suffix = name.rpartition(".")
-        ext = f"{dot}{suffix}" if dot and len(suffix) < _MAX_KEPT_EXTENSION_LENGTH else ""
+        ext = (
+            f"{dot}{suffix}" if dot and len(suffix) < _MAX_KEPT_EXTENSION_LENGTH else ""
+        )
         if not stem:
             ext = ""
         name = name[: len(name) - len(ext)][: max_length - len(ext)].rstrip() + ext

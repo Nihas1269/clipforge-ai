@@ -32,7 +32,14 @@ ME_URL = "/api/v1/users/me"
 PASSWORD_URL = "/api/v1/users/me/password"
 ADMIN_URL = "/test/admin"
 
-PUBLIC_FIELDS = {"id", "email", "full_name", "is_active", "email_verified", "created_at"}
+PUBLIC_FIELDS = {
+    "id",
+    "email",
+    "full_name",
+    "is_active",
+    "email_verified",
+    "created_at",
+}
 
 
 @pytest.fixture
@@ -83,7 +90,9 @@ def client(session_factory, monkeypatch):
 
 
 def _register(client, email="alice@example.com", password=PASSWORD, **extra):
-    return client.post(REGISTER_URL, json={"email": email, "password": password, **extra})
+    return client.post(
+        REGISTER_URL, json={"email": email, "password": password, **extra}
+    )
 
 
 def _login(client, email="alice@example.com", password=PASSWORD, **kwargs):
@@ -172,7 +181,9 @@ def test_me_with_tampered_token_returns_401(client):
     _register(client)
     token = _token(client)
     header, payload, signature = token.split(".")
-    tampered = f"{header}.{payload}.{signature[:-2]}{'AA' if signature[-2:] != 'AA' else 'BB'}"
+    tampered = (
+        f"{header}.{payload}.{signature[:-2]}{'AA' if signature[-2:] != 'AA' else 'BB'}"
+    )
 
     assert client.get(ME_URL, headers=_bearer(tampered)).status_code == 401
 
@@ -313,13 +324,18 @@ def test_patch_me_updates_full_name_and_persists(client, db):
     _register(client, full_name="Alice")
     token = _token(client)
 
-    response = client.patch(ME_URL, json={"full_name": "  Alice Liddell "}, headers=_bearer(token))
+    response = client.patch(
+        ME_URL, json={"full_name": "  Alice Liddell "}, headers=_bearer(token)
+    )
 
     assert response.status_code == 200
     assert response.json()["full_name"] == "Alice Liddell"
     assert set(response.json()) == PUBLIC_FIELDS
     assert _stored_user(db).full_name == "Alice Liddell"
-    assert client.get(ME_URL, headers=_bearer(token)).json()["full_name"] == "Alice Liddell"
+    assert (
+        client.get(ME_URL, headers=_bearer(token)).json()["full_name"]
+        == "Alice Liddell"
+    )
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])
@@ -349,8 +365,12 @@ def test_patch_me_accepts_max_length_and_rejects_longer_full_name(client, db):
     _register(client)
     token = _token(client)
 
-    longest = client.patch(ME_URL, json={"full_name": "x" * 255}, headers=_bearer(token))
-    too_long = client.patch(ME_URL, json={"full_name": "y" * 256}, headers=_bearer(token))
+    longest = client.patch(
+        ME_URL, json={"full_name": "x" * 255}, headers=_bearer(token)
+    )
+    too_long = client.patch(
+        ME_URL, json={"full_name": "y" * 256}, headers=_bearer(token)
+    )
     wrong_type = client.patch(ME_URL, json={"full_name": 5}, headers=_bearer(token))
 
     assert longest.status_code == 200
@@ -399,7 +419,9 @@ def test_patch_me_only_changes_the_authenticated_user(client, db):
     _register(client, email="bob@example.com", full_name="Bob")
     bob_token = _token(client, email="bob@example.com")
 
-    response = client.patch(ME_URL, json={"full_name": "Robert"}, headers=_bearer(bob_token))
+    response = client.patch(
+        ME_URL, json={"full_name": "Robert"}, headers=_bearer(bob_token)
+    )
 
     assert response.status_code == 200
     assert _stored_user(db, "bob@example.com").full_name == "Robert"
@@ -411,7 +433,9 @@ def test_patch_me_with_cookie_requires_trusted_origin(client, db):
     assert _login(client).status_code == 200
 
     no_origin = client.patch(ME_URL, json={"full_name": "Mallory"})
-    evil = client.patch(ME_URL, json={"full_name": "Mallory"}, headers={"Origin": EVIL_ORIGIN})
+    evil = client.patch(
+        ME_URL, json={"full_name": "Mallory"}, headers={"Origin": EVIL_ORIGIN}
+    )
     assert no_origin.status_code == 403
     assert evil.status_code == 403
     assert _stored_user(db).full_name == "Alice"
@@ -511,7 +535,11 @@ def test_change_password_accepts_boundary_lengths(client):
         {"current_password": PASSWORD},
         {"new_password": NEW_PASSWORD},
         {"current_password": "", "new_password": NEW_PASSWORD},
-        {"current_password": PASSWORD, "new_password": NEW_PASSWORD, "email": "m@example.com"},
+        {
+            "current_password": PASSWORD,
+            "new_password": NEW_PASSWORD,
+            "email": "m@example.com",
+        },
     ],
 )
 def test_change_password_invalid_body_returns_422(client, db, body):
@@ -544,8 +572,12 @@ def test_change_password_only_changes_the_authenticated_user(client, db):
 
     assert _change_password(client, bob_token).status_code == 200
 
-    assert verify_password(NEW_PASSWORD, _stored_user(db, "bob@example.com").hashed_password)
-    assert verify_password(PASSWORD, _stored_user(db, "alice@example.com").hashed_password)
+    assert verify_password(
+        NEW_PASSWORD, _stored_user(db, "bob@example.com").hashed_password
+    )
+    assert verify_password(
+        PASSWORD, _stored_user(db, "alice@example.com").hashed_password
+    )
 
 
 def test_change_password_with_cookie_requires_trusted_origin(client, db):

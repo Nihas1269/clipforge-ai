@@ -61,5 +61,7 @@ class InMemoryRateLimiter:
             self._hits.pop(key, None)
 
     def _prune(self, cutoff: float) -> None:
-        for key in [k for k, hits in self._hits.items() if not hits or hits[-1] <= cutoff]:
+        for key in [
+            k for k, hits in self._hits.items() if not hits or hits[-1] <= cutoff
+        ]:
             del self._hits[key]

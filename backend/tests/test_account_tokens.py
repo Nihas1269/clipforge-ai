@@ -276,7 +276,10 @@ def test_expired_password_reset_token_is_rejected(db, user, sender, limiter):
 
     with pytest.raises(InvalidOneTimeTokenError):
         _reset(
-            db, sender.outbox[0].context["token"], limiter, now=NOW + timedelta(minutes=15)
+            db,
+            sender.outbox[0].context["token"],
+            limiter,
+            now=NOW + timedelta(minutes=15),
         )
     db.refresh(user)
     assert verify_password(PASSWORD, user.hashed_password)

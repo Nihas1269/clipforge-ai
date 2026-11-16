@@ -282,7 +282,9 @@ def test_soft_time_limit_marks_job_failed_as_timed_out(db, user):
 
 
 def test_duplicate_delivery_does_not_run_a_finished_job_again(db, user):
-    job = enqueue_job(JobType.METADATA, succeed, db=db, user_id=user.id, payload={"value": 1})
+    job = enqueue_job(
+        JobType.METADATA, succeed, db=db, user_id=user.id, payload={"value": 1}
+    )
 
     succeed.apply(args=[str(job.id)])
 
@@ -594,11 +596,17 @@ def test_job_logs_contain_no_payload_or_error_text(db, user, caplog):
     caplog.set_level(logging.DEBUG, logger="app.worker.jobs")
 
     enqueue_job(
-        JobType.METADATA, succeed, db=db, user_id=user.id, payload={"text": PRIVATE_CONTENT}
+        JobType.METADATA,
+        succeed,
+        db=db,
+        user_id=user.id,
+        payload={"text": PRIVATE_CONTENT},
     )
     enqueue_job(JobType.TRANSCRIPTION, crash, db=db, user_id=user.id)
 
-    job_records = [record for record in caplog.records if record.name == "app.worker.jobs"]
+    job_records = [
+        record for record in caplog.records if record.name == "app.worker.jobs"
+    ]
     assert any(record.getMessage() == "job_failed" for record in job_records)
     for record in job_records:
         text = repr(record.__dict__)

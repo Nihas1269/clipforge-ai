@@ -255,7 +255,14 @@ def test_malformed_or_unknown_verification_token_returns_400(client, db, token):
 
 
 @pytest.mark.parametrize(
-    "body", [{}, {"token": ""}, {"token": "a" * 129}, {"token": 123}, {"token": "x", "extra": 1}]
+    "body",
+    [
+        {},
+        {"token": ""},
+        {"token": "a" * 129},
+        {"token": 123},
+        {"token": "x", "extra": 1},
+    ],
 )
 def test_invalid_verification_body_returns_422(client, body):
     response = client.post(VERIFY_CONFIRM_URL, json=body)
@@ -554,7 +561,9 @@ def test_reset_requests_are_rate_limited_per_address_whether_or_not_it_exists(
     _register(client)
 
     known = [_request_reset(client).status_code for _ in range(3)]
-    unknown = [_request_reset(client, email="nobody@x.example").status_code for _ in range(3)]
+    unknown = [
+        _request_reset(client, email="nobody@x.example").status_code for _ in range(3)
+    ]
 
     assert known == unknown == [202, 202, 429]
     limited = _request_reset(client)
@@ -571,7 +580,8 @@ def test_reset_requests_are_rate_limited_per_client(make_client):
     client = make_client(rate_limiters=limiters)
 
     statuses = [
-        _request_reset(client, email=f"user{i}@example.com").status_code for i in range(4)
+        _request_reset(client, email=f"user{i}@example.com").status_code
+        for i in range(4)
     ]
 
     assert statuses == [202, 202, 202, 429]
@@ -585,7 +595,9 @@ def test_token_attempts_are_rate_limited(make_client, db):
     _register(client)
     valid = _last_token(client, "email_verification")
 
-    statuses = [_confirm_verification(client, f"guess-{i}").status_code for i in range(3)]
+    statuses = [
+        _confirm_verification(client, f"guess-{i}").status_code for i in range(3)
+    ]
     limited = _confirm_verification(client, valid)
 
     assert statuses == [400, 400, 400]
@@ -616,7 +628,9 @@ def test_verification_requests_are_rate_limited_per_user(make_client):
     _register(client)  # Uses the first of the three requests.
     headers = _bearer(client)
 
-    statuses = [client.post(VERIFY_REQUEST_URL, headers=headers).status_code for _ in range(3)]
+    statuses = [
+        client.post(VERIFY_REQUEST_URL, headers=headers).status_code for _ in range(3)
+    ]
 
     assert statuses == [202, 202, 429]
 

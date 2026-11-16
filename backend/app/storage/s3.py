@@ -49,7 +49,12 @@ TRANSFER_CONFIG = TransferConfig(
 _NOT_FOUND_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
 
 # Settings that must be set when STORAGE_BACKEND=s3.
-REQUIRED_SETTINGS = ("S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY")
+REQUIRED_SETTINGS = (
+    "S3_BUCKET",
+    "S3_REGION",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+)
 
 
 def is_not_found_error(error: ClientError) -> bool:
@@ -89,7 +94,9 @@ def check_s3_settings(settings: Settings) -> None:
             f"{', '.join(missing)}. See backend/README.md."
         )
     endpoint = settings.S3_ENDPOINT_URL
-    if endpoint is not None and not endpoint.lower().startswith(("http://", "https://")):
+    if endpoint is not None and not endpoint.lower().startswith(
+        ("http://", "https://")
+    ):
         raise StorageConfigurationError(
             "S3_ENDPOINT_URL must start with http:// or https://."
         )
@@ -126,7 +133,11 @@ class S3Storage(StorageBackend):
     """
 
     def __init__(
-        self, client: Any, bucket: str, *, transfer_config: TransferConfig = TRANSFER_CONFIG
+        self,
+        client: Any,
+        bucket: str,
+        *,
+        transfer_config: TransferConfig = TRANSFER_CONFIG,
     ):
         if not bucket:
             raise StorageConfigurationError("S3 bucket name must not be empty.")
@@ -143,7 +154,9 @@ class S3Storage(StorageBackend):
         reader = _CountingReader(fileobj, max_bytes)
         # S3 replaces an object only once an upload completes; a failed
         # multipart upload is aborted by the transfer manager.
-        self.client.upload_fileobj(reader, self.bucket, key, Config=self.transfer_config)
+        self.client.upload_fileobj(
+            reader, self.bucket, key, Config=self.transfer_config
+        )
         logger.info(
             "storage.saved", extra={"storage_key": key, "size_bytes": reader.bytes_read}
         )
@@ -155,7 +168,9 @@ class S3Storage(StorageBackend):
             response = self.client.get_object(Bucket=self.bucket, Key=key)
         except ClientError as exc:
             if is_not_found_error(exc):
-                raise StorageObjectNotFoundError(f"No stored object for key {key!r}.") from None
+                raise StorageObjectNotFoundError(
+                    f"No stored object for key {key!r}."
+                ) from None
             raise
         return response["Body"]
 

@@ -27,7 +27,11 @@ def make_client(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("LOCAL_STORAGE_DIR", str(tmp_path / "storage"))
-    for name in ("MAX_UPLOAD_SIZE_MB", "ALLOWED_VIDEO_EXTENSIONS", "ALLOWED_VIDEO_CONTENT_TYPES"):
+    for name in (
+        "MAX_UPLOAD_SIZE_MB",
+        "ALLOWED_VIDEO_EXTENSIONS",
+        "ALLOWED_VIDEO_CONTENT_TYPES",
+    ):
         monkeypatch.delenv(name, raising=False)
 
     def factory(**env: str) -> TestClient:

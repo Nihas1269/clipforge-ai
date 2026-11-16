@@ -128,7 +128,9 @@ def test_every_account_template_renders_a_link_with_the_token_in_the_fragment():
     verification = render_email_body(
         _message(account_tokens.EMAIL_VERIFICATION_TEMPLATE), FRONTEND + "/"
     )
-    reset = render_email_body(_message(account_tokens.PASSWORD_RESET_TEMPLATE), FRONTEND)
+    reset = render_email_body(
+        _message(account_tokens.PASSWORD_RESET_TEMPLATE), FRONTEND
+    )
 
     assert f"{FRONTEND}/verify-email#token={TOKEN}" in verification
     assert f"{FRONTEND}/reset-password#token={TOKEN}" in reset
@@ -145,11 +147,15 @@ def test_rendering_rejects_unknown_template_and_missing_token():
 
 
 def test_fake_provider_is_the_default_outside_production():
-    assert isinstance(build_email_sender(Settings(EMAIL_PROVIDER="fake")), FakeEmailSender)
+    assert isinstance(
+        build_email_sender(Settings(EMAIL_PROVIDER="fake")), FakeEmailSender
+    )
 
 
 def test_fake_provider_is_refused_in_production():
-    settings = Settings(APP_ENV="production", SECRET_KEY=STRONG_SECRET, EMAIL_PROVIDER="fake")
+    settings = Settings(
+        APP_ENV="production", SECRET_KEY=STRONG_SECRET, EMAIL_PROVIDER="fake"
+    )
 
     with pytest.raises(EmailNotConfiguredError, match="production"):
         build_email_sender(settings)
@@ -205,7 +211,8 @@ def test_complete_smtp_configuration_builds_smtp_sender():
 
 
 @pytest.mark.parametrize(
-    "url", ["ftp://app.example.test", "app.example.test", "https://", "https://a.test/?x=1"]
+    "url",
+    ["ftp://app.example.test", "app.example.test", "https://", "https://a.test/?x=1"],
 )
 def test_invalid_frontend_url_is_rejected(url):
     with pytest.raises(ValidationError):
@@ -232,7 +239,11 @@ def test_starttls_delivery_logs_in_and_sends_rendered_message():
 
     (client,) = FakeSMTP.instances
     assert (client.host, client.port, client.timeout) == ("smtp.example.test", 587, 7.5)
-    assert client.calls == ["starttls", ("login", "mailer-user", SMTP_SECRET), "send_message"]
+    assert client.calls == [
+        "starttls",
+        ("login", "mailer-user", SMTP_SECRET),
+        "send_message",
+    ]
     assert client.closed
     (mime,) = client.sent
     assert mime["To"] == "alice@example.com"

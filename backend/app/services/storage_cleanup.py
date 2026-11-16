@@ -60,13 +60,20 @@ def delete_pending_object(
             db.rollback()
             logger.error(
                 "storage_deletion_attempt_not_recorded",
-                extra={"deletion_id": deletion_id, "error_type": type(record_exc).__name__},
+                extra={
+                    "deletion_id": deletion_id,
+                    "error_type": type(record_exc).__name__,
+                },
             )
         level = logging.ERROR if attempts >= ALERT_AFTER_ATTEMPTS else logging.WARNING
         logger.log(
             level,
             "storage_deletion_failed",
-            extra={"deletion_id": deletion_id, "attempts": attempts, "error_type": error_type},
+            extra={
+                "deletion_id": deletion_id,
+                "attempts": attempts,
+                "error_type": error_type,
+            },
         )
         return False
 
@@ -107,7 +114,9 @@ def retry_pending_storage_deletions(
         )
         .limit(limit)
     ).all()
-    deleted = sum(1 for deletion in pending if delete_pending_object(db, storage, deletion))
+    deleted = sum(
+        1 for deletion in pending if delete_pending_object(db, storage, deletion)
+    )
     if pending:
         logger.info(
             "storage_deletion_retry_finished",

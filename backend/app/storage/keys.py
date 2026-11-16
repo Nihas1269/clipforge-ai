@@ -28,5 +28,7 @@ def video_source_key(user_id: int | str, video_id: int | str, ext: str = "") -> 
     user = _validate_id("user_id", user_id)
     video = _validate_id("video_id", video_id)
     if not isinstance(ext, str) or not _EXT_RE.fullmatch(ext):
-        raise InvalidStorageKeyError("ext must be empty or '.' followed by letters or digits.")
+        raise InvalidStorageKeyError(
+            "ext must be empty or '.' followed by letters or digits."
+        )
     return validate_key(f"users/{user}/videos/{video}/source{ext.lower()}")
