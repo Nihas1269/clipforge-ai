@@ -73,8 +73,12 @@ def test_upgrade_creates_users_table(database_url, engine):
         "is_admin",
         "created_at",
         "updated_at",
+        "email_verified_at",
+        "token_version",
     }
     assert columns["full_name"]["nullable"] is True
+    assert columns["email_verified_at"]["nullable"] is True
+    assert columns["token_version"]["nullable"] is False
     assert columns["email"]["nullable"] is False
     assert columns["hashed_password"]["nullable"] is False
     indexes = {index["name"]: index for index in inspector.get_indexes("users")}
@@ -103,12 +107,17 @@ def test_migrated_schema_enforces_case_insensitive_unique_email(
             {"id": uuid.uuid4().hex, "email": "alice@example.com", "hashed_password": "x"},
         )
         row = connection.execute(
-            text("SELECT is_active, is_admin, created_at, updated_at FROM users")
+            text(
+                "SELECT is_active, is_admin, created_at, updated_at, "
+                "email_verified_at, token_version FROM users"
+            )
         ).one()
     assert bool(row.is_active) is True
     assert bool(row.is_admin) is False
     assert row.created_at is not None
     assert row.updated_at is not None
+    assert row.email_verified_at is None
+    assert row.token_version == 0
 
     for email in ("alice@example.com", "Alice@Example.com"):
         with pytest.raises(IntegrityError):
@@ -117,6 +126,53 @@ def test_migrated_schema_enforces_case_insensitive_unique_email(
                     INSERT_USER,
                     {"id": uuid.uuid4().hex, "email": email, "hashed_password": "x"},
                 )
+
+
+def test_upgrade_creates_auth_tokens_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]: column for column in inspector.get_columns("auth_tokens")
+    }
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "purpose",
+        "token_hash",
+        "created_at",
+        "expires_at",
+        "used_at",
+    }
+    assert columns["used_at"]["nullable"] is True
+    assert columns["expires_at"]["nullable"] is False
+    indexes = {index["name"]: index for index in inspector.get_indexes("auth_tokens")}
+    assert indexes["ix_auth_tokens_token_hash"]["unique"]
+    assert indexes["ix_auth_tokens_user_id"]["column_names"] == ["user_id"]
+    foreign_keys = inspector.get_foreign_keys("auth_tokens")
+    assert foreign_keys[0]["referred_table"] == "users"
+
+
+def test_downgrade_one_step_removes_auth_tokens_and_keeps_users(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0002")
+
+    inspector = inspect(engine)
+    table_names = inspector.get_table_names()
+    assert "auth_tokens" not in table_names
+    # Only the auth migration is rolled back; the earlier videos migration stays.
+    assert "videos" in table_names
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    assert "token_version" not in columns
+    assert "email_verified_at" not in columns
+    # The lowercase CHECK constraint survives the column changes.
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                INSERT_USER,
+                {"id": uuid.uuid4().hex, "email": "Alice@Example.com", "hashed_password": "x"},
+            )
 
 
 def test_downgrade_removes_users_table(database_url, engine):

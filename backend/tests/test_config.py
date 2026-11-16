@@ -18,6 +18,8 @@ CONFIG_ENV_VARS = (
     "REDIS_URL",
     "SECRET_KEY",
     "ACCESS_TOKEN_EXPIRE_MINUTES",
+    "EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES",
+    "PASSWORD_RESET_TOKEN_EXPIRE_MINUTES",
     "CORS_ORIGINS",
     "MAX_UPLOAD_SIZE_MB",
     "STORAGE_BACKEND",
@@ -41,6 +43,8 @@ def test_defaults_load_in_development():
     assert settings.REDIS_URL is None
     assert settings.SECRET_KEY.get_secret_value() == DEFAULT_SECRET_KEY
     assert settings.ACCESS_TOKEN_EXPIRE_MINUTES == 30
+    assert settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES == 1440
+    assert settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES == 30
     assert settings.CORS_ORIGINS == []
     assert settings.MAX_UPLOAD_SIZE_MB == 500
     assert settings.STORAGE_BACKEND == "local"
@@ -93,6 +97,8 @@ def test_blank_database_url_is_treated_as_unset(monkeypatch):
         ("APP_ENV", "staging"),
         ("STORAGE_BACKEND", "ftp"),
         ("ACCESS_TOKEN_EXPIRE_MINUTES", "0"),
+        ("EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES", "0"),
+        ("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES", "-5"),
         ("MAX_UPLOAD_SIZE_MB", "-1"),
     ],
 )

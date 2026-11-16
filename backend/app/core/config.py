@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None
     SECRET_KEY: SecretStr = SecretStr(DEFAULT_SECRET_KEY)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, gt=0)
+    # Lifetimes of the single-use email verification and password reset tokens.
+    EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = Field(default=1440, gt=0)
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = Field(default=30, gt=0)
     # NoDecode lets CORS_ORIGINS be a comma-separated string in the
     # environment instead of JSON.
     CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
