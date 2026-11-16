@@ -139,6 +139,60 @@ def example(db: Session = Depends(get_db)):
     ...
 ```
 
+## Database migrations
+
+Schema changes are managed with [Alembic](https://alembic.sqlalchemy.org/).
+The configuration is `alembic.ini`, and the migration scripts live in
+`migrations/versions/`. `migrations/env.py` reads the database URL from the
+shared settings (`DATABASE_URL`, via `get_database_url()`) and uses
+`Base.metadata` from `app/database.py`, with every model registered by
+`app/models/__init__.py`. No URL or credential is stored in `alembic.ini`.
+
+Run these commands from the `backend/` directory with `DATABASE_URL` set
+(environment variable or `backend/.env`):
+
+```bash
+# Apply all migrations
+alembic upgrade head
+
+# Show the current revision and the history
+alembic current
+alembic history
+
+# Undo the most recent migration
+alembic downgrade -1
+
+# Create a new migration after changing a model (review the generated file!)
+alembic revision --autogenerate -m "describe the change"
+```
+
+When you add a model, import it in `app/models/__init__.py` so autogenerate
+sees it.
+
+## Users and password hashing
+
+- `app/models/user.py` — the `User` model (`users` table). Emails are
+  stripped and lowercased before they are stored, and the database enforces
+  this with a `CHECK (email = lower(email))` constraint plus a unique index on
+  `email`, so uniqueness is case-insensitive at the database level.
+- `app/repositories/users.py` — `get_by_email`, `get_by_id`, and
+  `create_user`. `create_user` hashes the password, commits the user, and
+  raises `DuplicateEmailError` if the email is already registered (in any
+  letter case) or `ValueError` for an invalid email or empty password.
+- `app/core/security.py` — `hash_password` and `verify_password`.
+
+Passwords are hashed with **Argon2id** through `argon2-cffi`, using the
+library's default (RFC 9106 based) parameters. Argon2id won the Password
+Hashing Competition and is the first choice in the OWASP Password Storage
+Cheat Sheet; it is memory-hard, which makes GPU/ASIC cracking far more
+expensive than with bcrypt, and it has no 72-byte password length limit.
+Password hashes must never be logged or returned by the API; `User.__repr__`
+only shows the id.
+
+Email validation is intentionally basic (a non-empty local part and domain
+separated by `@`, no whitespace, at most 320 characters); stricter
+validation belongs to the request schemas that will use these helpers.
+
 ## Running the server
 
 ```bash
@@ -238,6 +292,7 @@ The handlers live in `app/core/errors.py`:
 pytest
 ```
 
-The tests use an in-memory SQLite database and do not require PostgreSQL or
-`DATABASE_URL` to be set. They ignore `backend/.env` and clear the
+The tests use isolated SQLite databases (in memory, or a temporary file for
+the migration tests in `tests/test_migrations.py`) and do not require
+PostgreSQL or `DATABASE_URL` to be set. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).

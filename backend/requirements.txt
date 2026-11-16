@@ -5,3 +5,5 @@ pytest>=8.0
 SQLAlchemy>=2.0,<3.0
 psycopg2-binary>=2.9
 pydantic-settings>=2.7,<3.0
+alembic>=1.13,<2.0
+argon2-cffi>=23.1,<26.0
