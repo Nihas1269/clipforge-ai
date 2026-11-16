@@ -2,6 +2,7 @@ from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -118,6 +119,61 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY_ID: str | None = None
     S3_SECRET_ACCESS_KEY: SecretStr | None = None
     S3_ADDRESSING_STYLE: Literal["auto", "path", "virtual"] = "auto"
+    # Outgoing email (verification and password reset). "fake" records
+    # messages in memory and never sends; it is refused in production. "smtp"
+    # needs SMTP_HOST, EMAIL_FROM and FRONTEND_URL; get_email_sender() reports
+    # missing values when email is first used, so the app still starts.
+    EMAIL_PROVIDER: Literal["fake", "smtp"] = "fake"
+    EMAIL_FROM: str | None = None
+    # Base URL of the web app; emailed links point at its /verify-email and
+    # /reset-password pages.
+    FRONTEND_URL: str | None = None
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = Field(default=587, gt=0, lt=65536)
+    SMTP_SECURITY: Literal["starttls", "ssl", "none"] = "starttls"
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: SecretStr | None = None
+    SMTP_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+
+    @field_validator(
+        "EMAIL_FROM",
+        "FRONTEND_URL",
+        "SMTP_HOST",
+        "SMTP_USERNAME",
+        "SMTP_PASSWORD",
+        mode="before",
+    )
+    @classmethod
+    def _blank_email_setting_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("EMAIL_PROVIDER", "SMTP_SECURITY", mode="before")
+    @classmethod
+    def _normalize_email_choice(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("FRONTEND_URL", mode="after")
+    @classmethod
+    def _validate_frontend_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if (
+            parts.scheme.lower() not in ("http", "https")
+            or not parts.netloc
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                "FRONTEND_URL must be an http:// or https:// URL without a "
+                "query or fragment."
+            )
+        return value.rstrip("/")
 
     @field_validator(
         "S3_ENDPOINT_URL",
