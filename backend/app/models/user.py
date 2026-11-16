@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, String, Uuid, false, func, true
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    String,
+    Uuid,
+    false,
+    func,
+    text,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base
@@ -54,6 +63,11 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
     is_admin: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Set when the user confirms ownership of the email address.
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Copied into every access token as the `ver` claim. Incrementing it (for
+    # example on a password reset) invalidates all previously issued tokens.
+    token_version: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

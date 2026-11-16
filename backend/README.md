@@ -66,6 +66,8 @@ Copy-Item .env.example .env
 | `REDIS_URL`                   | unset                    | Optional Redis connection string.                            |
 | `SECRET_KEY`                  | development-only default | Secret for signing tokens. Required in production.           |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30`                     | Access token lifetime in minutes (must be positive).         |
+| `EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES` | `1440`       | Email verification token lifetime in minutes (positive).     |
+| `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | `30`             | Password reset token lifetime in minutes (positive).         |
 | `CORS_ORIGINS`                | empty                    | Comma-separated list of allowed origins (see below).         |
 | `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (must be positive).         |
 | `STORAGE_BACKEND`             | `local`                  | `local` or `s3` (see Storage below).                         |
@@ -373,10 +375,106 @@ root and is not versioned.
 
 ## Endpoints
 
-| Method | Path           | Response             |
-| ------ | -------------- | -------------------- |
-| GET    | `/health`      | `{"status": "ok"}`   |
-| GET    | `/api/v1/ping` | `{"status": "ok"}`   |
+| Method | Path                    | Request body                         | Response                                                                 |
+| ------ | ----------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| GET    | `/health`               | —                                    | `{"status": "ok"}`                                                       |
+| GET    | `/api/v1/ping`          | —                                    | `{"status": "ok"}`                                                       |
+| POST   | `/api/v1/auth/register` | `{email, password, full_name?}`      | `201` public user; `409` email taken; `422` invalid email or password    |
+| POST   | `/api/v1/auth/login`    | `{email, password}`                  | `200` `{access_token, token_type: "bearer"}` + `access_token` cookie; `401` |
+| POST   | `/api/v1/auth/logout`   | —                                    | `204`, clears the `access_token` cookie                                  |
+
+The auth endpoints also return `403` (`csrf_failed`) for requests from an
+untrusted origin (see Authentication below).
+
+## Authentication
+
+- **Register** validates the email with `email-validator` (ASCII addresses
+  only), strips and lowercases it — the same normalization as the `users`
+  table, so `Alice@Example.com` and `alice@example.com` are one account — and
+  requires a password of 8 to 256 characters. The response is the public user
+  (`id`, `email`, `full_name`, `is_active`, `email_verified`, `created_at`);
+  the password hash is never returned.
+- **Login** returns the same `401 invalid_credentials` response ("Incorrect
+  email or password.") for an unknown email, a wrong password, and an
+  inactive user, and hashes a dummy password for unknown emails so response
+  times do not reveal which emails exist.
+- **Access tokens** are HS256 JWTs (PyJWT) signed with `SECRET_KEY`, with
+  `sub` (user id), `iat`, `exp` (`ACCESS_TOKEN_EXPIRE_MINUTES` after issue) and
+  `ver` (the user's `token_version`) claims. Helpers live in
+  `app/core/security.py` (`create_access_token`, `decode_access_token`).
+- **Cookie**: login also sets `access_token` with `HttpOnly`, `SameSite=Lax`,
+  `Path=/`, `Max-Age` equal to the token lifetime, and `Secure` when
+  `APP_ENV=production`. Logout expires it with the same attributes.
+- **Current user**: protected routes depend on `get_current_user` from
+  `app/api/deps.py`. It reads `Authorization: Bearer <token>` or, if that
+  header is absent, the cookie, and returns `401` for a missing, invalid or
+  expired token, an unknown or inactive user, or a token whose `ver` no
+  longer matches the user's `token_version`.
+- **Logout does not revoke tokens.** JWTs are stateless: logout only clears
+  the browser cookie, and a token copied before logout stays valid until it
+  expires. Incrementing `users.token_version` (done automatically by a
+  password reset) invalidates every token issued to that user; there is no
+  per-token revocation list.
+
+### CSRF protection
+
+Because the cookie is sent automatically by browsers, state-changing
+requests (anything except `GET`, `HEAD`, `OPTIONS`, `TRACE`) are checked in
+addition to `SameSite=Lax` (`app/core/csrf.py`):
+
+- The `Origin` header (or, without it, the origin of `Referer`) must be the
+  API's own origin or one listed in `CORS_ORIGINS`; otherwise — including
+  `Origin: null` — the request gets `403 csrf_failed`. Put the frontend's
+  origin in `CORS_ORIGINS`.
+- A request with neither header is accepted only if it carries no
+  `access_token` cookie (non-browser clients). Clients that authenticate with
+  `Authorization: Bearer` are not subject to the check.
+- The check runs on all `/api/v1/auth/*` endpoints and on every
+  cookie-authenticated request through `get_current_user`.
+- The API's own origin is taken from the request URL. Behind a reverse proxy
+  that terminates TLS, the backend may see `http://` while browsers send
+  `https://`; either let the server trust forwarded headers (for example
+  `uvicorn --proxy-headers --forwarded-allow-ips=<proxy ip>`) or list the
+  public origin in `CORS_ORIGINS`, or same-origin requests get `403`.
+
+### Email verification and password reset primitives
+
+The building blocks for the account flows of CF-045 (which adds the
+endpoints and email templates):
+
+- `app/models/auth_token.py` — the `auth_tokens` table. Tokens are 256-bit
+  random values (`secrets.token_urlsafe`); only their SHA-256 hash is stored.
+  Each token has a purpose (`email_verification` or `password_reset`), an
+  expiry, and `used_at`.
+- `app/repositories/auth_tokens.py` — `create_token` (invalidates earlier
+  tokens of the same purpose), `consume_token` (single use, enforced by a
+  conditional `UPDATE`, so concurrent replays fail), `invalidate_tokens`.
+  Malformed, unknown, expired, used and wrong-purpose tokens all raise the
+  same `InvalidOneTimeTokenError`.
+- `app/services/account_tokens.py` — `send_email_verification`,
+  `verify_email` (sets `users.email_verified_at`), `request_password_reset`
+  (silent for unknown, malformed or inactive addresses, so responses never
+  reveal whether an account exists) and `reset_password` (sets the new
+  password and increments `token_version`, invalidating existing sessions).
+  Requests and attempts are rate-limited with the limiter passed in.
+- `app/core/rate_limit.py` — `InMemoryRateLimiter` (sliding window).
+- `app/services/email.py` — the `EmailSender` interface and
+  `FakeEmailSender`, which records messages in memory for tests and local
+  development and needs no email credentials.
+
+### Limitations
+
+- No per-token revocation: logout does not invalidate an issued JWT (see
+  above). Keep `ACCESS_TOKEN_EXPIRE_MINUTES` short.
+- There is no login rate limiting or account lockout yet, and the in-memory
+  rate limiter is per process and resets on restart; a shared limiter is part
+  of the security hardening work (CF-042).
+- Registration returns `409` for a taken email, as required, which does
+  reveal that the address is registered.
+- No real email provider is integrated; CF-045 adds delivery.
+- `request_password_reset` returns the same result for known and unknown
+  addresses, but sends email synchronously only for known ones, so response
+  time can differ. CF-045 should send email asynchronously or pad the timing.
 
 ## Error format
 
