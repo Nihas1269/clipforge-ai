@@ -33,7 +33,7 @@ the updated `package-lock.json`.
 
 | Variable                   | Default for local development | Purpose                       |
 | -------------------------- | ----------------------------- | ----------------------------- |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://127.0.0.1:8000`       | Base URL of the backend API. |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000`       | Base URL of the backend API. |
 
 [`.env.example`](.env.example) lists every variable with its local default.
 To set them locally, copy it to `frontend/.env.local` (ignored by Git):
@@ -43,7 +43,22 @@ cp .env.example .env.local
 ```
 
 Variables prefixed with `NEXT_PUBLIC_` are embedded in the browser bundle, so
-never put secrets in them. The frontend does not call the API yet.
+never put secrets in them. When `NEXT_PUBLIC_API_BASE_URL` is unset, the
+client falls back to `http://localhost:8000`.
+
+### Connecting to the backend
+
+The login session is the backend's HttpOnly `access_token` cookie
+(`SameSite=Lax`). For the browser to store and send it:
+
+- Open the frontend and the API on the **same host name**: use
+  `http://localhost:3000` with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`.
+  Mixing `localhost` and `127.0.0.1` makes them different sites and the cookie
+  is not sent.
+- List the frontend origin in the backend's `CORS_ORIGINS`
+  (`CORS_ORIGINS=http://localhost:3000`, as in `backend/.env.example`). The
+  backend also uses this list for its CSRF origin check, so requests from an
+  unlisted origin get `403 csrf_failed`.
 
 ## Development
 
@@ -68,11 +83,13 @@ Opens the app at <http://localhost:3000>.
 
 ```text
 src/
-  app/          Routes (App Router): root layout, landing page, and the
-                shared loading, error, and not-found states
+  app/          Routes (App Router): root layout, landing page, /login,
+                /register, the /dashboard placeholder, and the shared
+                loading, error, and not-found states
   components/   Reusable UI components (Button, Container, SiteHeader,
-                StatusMessage)
-  lib/          Shared constants such as the product name
+                StatusMessage, TextField) and the auth forms in auth/
+  lib/          Shared constants, the API client (lib/api), and form
+                validation (lib/validation)
 ```
 
 Tests sit next to the code they cover as `*.test.tsx`.
@@ -88,3 +105,33 @@ Tests sit next to the code they cover as `*.test.tsx`.
 - **Accessibility.** Pages include a skip link to the main content, controls
   have visible focus outlines, and the loading animation respects reduced
   motion preferences.
+
+## API client and authentication
+
+- `src/lib/api/client.ts` — `apiRequest` wraps `fetch` with the
+  `NEXT_PUBLIC_API_BASE_URL` base, `credentials: "include"` on every request,
+  JSON encoding and decoding, and a 15 s timeout. Non-2xx responses in the
+  backend error shape `{error: {code, message, details}}` become a typed
+  `ApiError` (`status`, `code`, `message`, `details`); other failures become an
+  `ApiError` with a client-side code (`unknown_error`, `invalid_response`,
+  `network_error`, or `timeout`, the last two with status `0`).
+- `src/lib/api/auth.ts` — `register`, `login`, and `logout`. The session is
+  the backend's HttpOnly cookie: the access token returned by login is
+  discarded and never stored in `localStorage`, `sessionStorage`, URLs, or
+  logs.
+- `/register` and `/login` validate input in the browser with the backend's
+  rules (an ASCII email address; a password of 8–256 characters). Field
+  errors are linked to their inputs and announced politely; API errors are
+  announced in an `aria-live="assertive"` alert; the submit button is
+  disabled while a request is pending. Registration redirects to
+  `/login?registered=1`, which shows a success message; login redirects to
+  `/dashboard`.
+- **401 handling.** The client never redirects; it throws an `ApiError` with
+  status `401` and the caller decides what to show. This keeps `/login` free
+  of redirect loops.
+
+Limitations: `/dashboard` is a placeholder that does not check the session
+(the backend has no "current user" endpoint yet), so it does not redirect
+logged-out visitors. The login and register pages do not redirect users who
+are already logged in. There is no logout control in the UI yet; `logout()`
+is available for it.
