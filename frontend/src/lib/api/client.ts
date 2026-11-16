@@ -14,7 +14,7 @@ export const DEFAULT_API_BASE_URL = "http://localhost:8000";
 /** Requests (including reading the response body) are aborted after this. */
 export const REQUEST_TIMEOUT_MS = 15_000;
 
-const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again.";
+export const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
 export type ApiErrorDetails = unknown;
 
@@ -85,7 +85,8 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-function toApiError(status: number, payload: unknown): ApiError {
+/** Builds the `ApiError` for a non-2xx response from its parsed body (or `undefined`). */
+export function toApiError(status: number, payload: unknown): ApiError {
   if (isApiErrorBody(payload)) {
     const { code, message, details } = payload.error;
     return new ApiError(status, code, message, details ?? null);

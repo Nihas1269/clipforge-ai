@@ -32,7 +32,7 @@ from app.core.errors import AppError
 from app.database import get_db
 from app.models.user import User
 from app.models.video import Video, VideoStatus
-from app.schemas.video import VideoRead
+from app.schemas.video import UploadLimits, VideoRead
 from app.services.video_upload import (
     CANONICAL_CONTENT_TYPES,
     CONTENT_TYPE_CONTAINERS,
@@ -376,6 +376,29 @@ def _store_upload(
         },
     )
     return video
+
+
+@router.get("/upload-limits", response_model=UploadLimits)
+def get_upload_limits(
+    _user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> UploadLimits:
+    """Return the limits `POST /videos` enforces, so clients can check files first.
+
+    Only allowlist entries the upload endpoint actually accepts (those with a
+    known file signature) are returned.
+    """
+    return UploadLimits(
+        max_upload_size_bytes=settings.MAX_UPLOAD_SIZE_MB * BYTES_PER_MB,
+        allowed_extensions=[
+            ext for ext in settings.ALLOWED_VIDEO_EXTENSIONS if ext in EXTENSION_CONTAINERS
+        ],
+        allowed_content_types=[
+            content_type
+            for content_type in settings.ALLOWED_VIDEO_CONTENT_TYPES
+            if content_type in CONTENT_TYPE_CONTAINERS
+        ],
+    )
 
 
 @router.post(

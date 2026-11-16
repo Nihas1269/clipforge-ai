@@ -2,6 +2,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -74,7 +75,11 @@ def test_get_engine_uses_database_url_from_environment(monkeypatch):
 
     engine = database.get_engine()
     try:
-        assert str(engine.url) == SQLITE_IN_MEMORY_URL
+        # Compare parsed components: newer SQLAlchemy versions percent-encode
+        # ":" when rendering the URL ("sqlite:///%3Amemory%3A").
+        assert engine.url == make_url(SQLITE_IN_MEMORY_URL)
+        assert engine.url.drivername == "sqlite"
+        assert engine.url.database == ":memory:"
         assert database.get_engine() is engine
         assert database.get_session_factory().kw["bind"] is engine
     finally:
