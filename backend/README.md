@@ -70,6 +70,12 @@ Copy-Item .env.example .env
 | `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (must be positive).         |
 | `STORAGE_BACKEND`             | `local`                  | `local` or `s3` (see Storage below).                         |
 | `LOCAL_STORAGE_DIR`           | `backend/storage`        | Root directory of the local storage backend.                 |
+| `S3_ENDPOINT_URL`             | unset                    | S3 API URL for R2/MinIO; leave unset for AWS S3.             |
+| `S3_REGION`                   | unset                    | Region (`auto` for R2). Required for `s3`.                   |
+| `S3_BUCKET`                   | unset                    | Bucket name. Required for `s3`.                              |
+| `S3_ACCESS_KEY_ID`            | unset                    | Access key ID. Required for `s3`.                            |
+| `S3_SECRET_ACCESS_KEY`        | unset                    | Secret access key. Required for `s3`.                        |
+| `S3_ADDRESSING_STYLE`         | `auto`                   | `auto`, `path` (MinIO), or `virtual`.                        |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -159,8 +165,8 @@ interface in `app/storage/base.py`. Obtain the configured backend with
 - `local_path(key)` is a context manager yielding a local file path for
   FFmpeg (a temporary copy for remote backends). Treat it as read-only.
 
-Only `STORAGE_BACKEND=local` is implemented; `s3` raises
-`StorageConfigurationError` from `get_storage()`. The local backend keeps files
+`STORAGE_BACKEND` selects `local` (default) or `s3` (see "S3-compatible
+storage" below). Both backends apply the same key rules. The local backend keeps files
 under `LOCAL_STORAGE_DIR` (default `backend/storage`, git-ignored). It rejects
 keys that are empty, contain `..` or backslashes, are absolute, or contain
 characters outside `A-Z a-z 0-9 . _ -` and `/`, have a segment ending in `.`
@@ -172,6 +178,71 @@ Limitations: the containment check happens before each file operation, so a
 process that can already write inside the storage root could still race it
 by swapping a directory for a symlink in between. Keep the storage directory
 writable only by the backend.
+
+### S3-compatible storage (AWS S3, Cloudflare R2, MinIO)
+
+With `STORAGE_BACKEND=s3`, objects are stored in `S3_BUCKET` through `boto3`
+(`app/storage/s3.py`). `get_storage()` raises `StorageConfigurationError`
+naming every missing setting when `S3_BUCKET`, `S3_REGION`,
+`S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` is unset; the application still
+starts, so only storage use fails.
+
+- `save` uploads with `upload_fileobj` (multipart above 8 MiB); `max_bytes`
+  is enforced while streaming and a failed multipart upload is aborted.
+- `get_download_url(key, expires_seconds)` returns a presigned GET URL valid
+  for `expires_seconds` (1 second to 7 days).
+- `local_path(key)` downloads to a temporary file that is deleted when the
+  context exits, even on error.
+- `exists` returns `False` only when the provider confirms the object is
+  missing (HTTP 404 with `404`/`NoSuchKey`/`NotFound`). Permission,
+  authentication, timeout and server errors are raised, never reported as
+  "missing" or as success. `open`/`size` raise `StorageObjectNotFoundError`
+  for a missing object.
+- Requests use a 10 s connect timeout, a 60 s read timeout and at most 3
+  attempts in total, including the first request (botocore "standard"
+  retries with `total_max_attempts=3`).
+
+Example configuration (placeholders only; put real values in `backend/.env`
+or the deployment environment, never in committed files). See
+`docs/setup/s3-storage.md` for how to obtain them.
+
+Cloudflare R2:
+
+```bash
+STORAGE_BACKEND=s3
+S3_ENDPOINT_URL=https://<your-cloudflare-account-id>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_BUCKET=<your-r2-bucket-name>
+S3_ACCESS_KEY_ID=<your-r2-access-key-id>
+S3_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+S3_ADDRESSING_STYLE=path
+```
+
+Local MinIO (Docker Compose; development-only values from
+`backend/.env.example`; create the `clipforge` bucket in the MinIO console at
+`http://localhost:9001` first):
+
+```bash
+STORAGE_BACKEND=s3
+S3_ENDPOINT_URL=http://localhost:9000
+S3_REGION=us-east-1
+S3_BUCKET=clipforge
+S3_ACCESS_KEY_ID=clipforge_dev
+S3_SECRET_ACCESS_KEY=clipforge_dev_password
+S3_ADDRESSING_STYLE=path
+```
+
+For AWS S3, leave `S3_ENDPOINT_URL` unset and set `S3_REGION` to the bucket's
+region.
+
+Limitations: a `HEAD` request has no error body, so a missing bucket that
+answers with a bare `404` is indistinguishable from a missing object in
+`exists`, which then returns `False` for what is really a configuration
+error. Aborting a multipart upload that fails part-way (for example when
+`max_bytes` is exceeded) is done by boto3's transfer manager; the tests check
+that the size limit stops the upload but do not exercise a real multipart
+abort. Bucket creation, lifecycle rules and CORS are not managed by the
+backend.
 
 ## Database migrations
 
@@ -328,5 +399,7 @@ pytest
 
 The tests use isolated SQLite databases (in memory, or a temporary file for
 the migration tests in `tests/test_migrations.py`) and do not require
-PostgreSQL or `DATABASE_URL` to be set. They ignore `backend/.env` and clear the
+PostgreSQL or `DATABASE_URL` to be set. The S3 storage tests use
+`botocore.stub.Stubber` and mocked clients, so they need no network access or
+S3 credentials. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).

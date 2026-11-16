@@ -113,15 +113,18 @@ as follows:
   `postgresql://<POSTGRES_USER>:<POSTGRES_PASSWORD>@localhost:5433/<POSTGRES_DB>`.
 - `REDIS_URL` — the `redis` service at `redis://localhost:6379/0` (no
   authentication).
-- `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION` —
-  the `minio` S3 API at `http://localhost:9000`. The access key and secret key
-  are `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`.
+- `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`,
+  `S3_BUCKET`, `S3_ADDRESSING_STYLE` — the `minio` S3 API at
+  `http://localhost:9000`. The access key and secret key are
+  `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`; `S3_ADDRESSING_STYLE` must be
+  `path`. Create the bucket (`clipforge` in `backend/.env.example`) in the
+  MinIO console before use.
 - `CORS_ORIGINS` (optional) — not related to Compose; for example
   `http://localhost:3000` for the local frontend.
 
 `REDIS_URL` is part of the backend settings but not used by any feature yet.
-The S3 variables are not read by the backend yet; they are provided for the
-storage feature that will use them.
+The S3 variables are used only when `STORAGE_BACKEND=s3`; the default `local`
+backend ignores them (see the Storage section of `backend/README.md`).
 
 If you change values in the root `.env`, update the backend variables to
 match.
