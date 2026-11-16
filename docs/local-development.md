@@ -119,8 +119,11 @@ as follows:
   `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`; `S3_ADDRESSING_STYLE` must be
   `path`. Create the bucket (`clipforge` in `backend/.env.example`) in the
   MinIO console before use.
-- `CORS_ORIGINS` (optional) — not related to Compose; for example
-  `http://localhost:3000` for the local frontend.
+- `CORS_ORIGINS` — not related to Compose; required for the frontend to call
+  the API. Set it to the frontend origin, `http://localhost:3000`, and open
+  the frontend at that address with
+  `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` (see `frontend/README.md`,
+  "Connecting to the backend").
 
 `REDIS_URL` is part of the backend settings but not used by any feature yet.
 The S3 variables are used only when `STORAGE_BACKEND=s3`; the default `local`
