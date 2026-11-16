@@ -19,6 +19,16 @@ DEFAULT_LOCAL_STORAGE_DIR = BACKEND_DIR / "storage"
 DATABASE_URL_ENV_VAR = "DATABASE_URL"
 WILDCARD_ORIGIN = "*"
 
+# Upload allowlists. Entries without a known file signature are ignored by the
+# upload endpoint (see app/services/video_upload.py).
+DEFAULT_ALLOWED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".mkv")
+DEFAULT_ALLOWED_VIDEO_CONTENT_TYPES = (
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/x-matroska",
+)
+
 # Development-only default for SECRET_KEY. It is public, so it is rejected in
 # production.
 DEFAULT_SECRET_KEY = "dev-insecure-secret-key-change-me"
@@ -105,6 +115,14 @@ class Settings(BaseSettings):
     # environment instead of JSON.
     CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
     MAX_UPLOAD_SIZE_MB: int = Field(default=500, gt=0)
+    # Comma-separated in the environment; normalized to lower case, and
+    # extensions always start with ".".
+    ALLOWED_VIDEO_EXTENSIONS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_VIDEO_EXTENSIONS)
+    )
+    ALLOWED_VIDEO_CONTENT_TYPES: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_VIDEO_CONTENT_TYPES)
+    )
     STORAGE_BACKEND: Literal["local", "s3"] = "local"
     # Root directory of the local storage backend. A relative path is
     # resolved against the current working directory.
@@ -222,6 +240,39 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.split(",")
         return value
+
+    @field_validator(
+        "ALLOWED_VIDEO_EXTENSIONS", "ALLOWED_VIDEO_CONTENT_TYPES", mode="before"
+    )
+    @classmethod
+    def _split_upload_allowlist(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.split(",")
+        return value
+
+    @field_validator("ALLOWED_VIDEO_EXTENSIONS", mode="after")
+    @classmethod
+    def _normalize_extensions(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for ext in value:
+            ext = ext.strip().lower()
+            if not ext:
+                continue
+            if not ext.startswith("."):
+                ext = f".{ext}"
+            if ext not in normalized:
+                normalized.append(ext)
+        return normalized
+
+    @field_validator("ALLOWED_VIDEO_CONTENT_TYPES", mode="after")
+    @classmethod
+    def _normalize_content_types(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for content_type in value:
+            content_type = content_type.strip().lower()
+            if content_type and content_type not in normalized:
+                normalized.append(content_type)
+        return normalized
 
     @field_validator("CORS_ORIGINS", mode="after")
     @classmethod
