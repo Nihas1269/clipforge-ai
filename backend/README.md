@@ -410,6 +410,53 @@ CF-018 will catch it). Older QuickTime files that do not start with an
 object fails during cleanup, the failure is logged
 (`video_upload_cleanup_failed`) and the object is left behind.
 
+## Managing videos
+
+`app/api/v1/videos.py` also lists, reads, deletes and serves the current
+user's videos. Every endpoint requires authentication. Ownership is checked
+by the reusable dependency `get_owned_video` (`app/api/deps.py`), which loads
+the video by id **and** owner (`app/repositories/videos.py`) and returns the
+same `404 not_found` for another user's video as for a missing one, so a
+video's existence is never revealed. Storage keys are never returned.
+
+- **List** (`GET /videos`): `limit` (default 20, 1-100), `offset` (0 to
+  1,000,000) and an optional `status` filter; ordered by `created_at`, newest
+  first (ties broken by id). `total` counts all matching videos.
+- **Delete** (`DELETE /videos/{id}`): in one transaction the video row (again
+  scoped to the owner), its processing jobs and a `pending_storage_deletions`
+  row for its file (migration `0005`) are written; only then is the file
+  deleted. If that fails, the video is still gone (`204`), the failure is
+  logged as `storage_deletion_failed` (deletion id, attempts, error type; never
+  the key or exception text) and the pending row stays. If the database
+  transaction fails nothing is deleted and `500 delete_failed` is returned.
+- **Cleanup outbox**: `app/services/storage_cleanup.py` retries pending
+  deletions (fewest attempts first, 50 per run) and removes each row once its
+  object is gone. Deleting a missing object succeeds, so retries are
+  idempotent. The Celery beat task
+  `app.worker.storage_cleanup.retry_storage_deletions` runs it every 10
+  minutes; from the 10th failed attempt on, failures are logged as errors.
+- **Media** (`GET /videos/{id}/media`): if the storage backend issues download
+  URLs (S3), the response is a `307` redirect to a presigned URL valid for 5
+  minutes (`MEDIA_URL_EXPIRE_SECONDS`), only ever issued after the ownership
+  check. Otherwise (local storage) the API streams the file in 64 KiB chunks
+  with `Content-Type` from the stored (validated) content type,
+  `Accept-Ranges: bytes`, `Content-Length`, `Cache-Control: private,
+  no-store` and `X-Content-Type-Options: nosniff`. A single `Range:
+  bytes=a-b`, `bytes=a-` or `bytes=-n` returns `206` with `Content-Range`;
+  only the requested bytes are read. Malformed ranges, units other than
+  `bytes`, and ranges that select no byte (start at or past the end,
+  `bytes=-0`, any range of an empty file) return `416` with
+  `Content-Range: bytes */<size>`. A request for several ranges, or one with
+  `If-Range`, gets the whole file (`200`), as RFC 9110 allows. A row whose
+  file is missing returns `404 media_not_found`.
+
+Limitations: presigned URLs are bearer URLs — anyone holding one can download
+the file until it expires (5 minutes), and they contain the object key. S3
+serves the object with the content type stored at upload (the upload does
+not set one yet), not the video's `content_type`. Multipart (`multipart/
+byteranges`) responses are not supported. A concurrent retry run and a
+request can both delete the same object, which is harmless.
+
 ## Background jobs
 
 Long-running work (metadata extraction, transcription, clip detection,
@@ -579,6 +626,10 @@ root and is not versioned.
 | POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
 | GET    | `/api/v1/videos/upload-limits` | —                             | `200` `{max_upload_size_bytes, allowed_extensions, allowed_content_types}`; `401` |
 | POST   | `/api/v1/videos`        | multipart, one file part `file`      | `201` `VideoRead`; `400` malformed multipart; `401`; `413` too large; `415` type not allowed or mismatched; `422` missing or empty file; `500`/`503` storage or database failure |
+| GET    | `/api/v1/videos`        | — (query `limit` 1-100, default 20; `offset`; `status`) | `200` `{items: [VideoRead], total}`, newest first; `401`; `422` invalid parameter |
+| GET    | `/api/v1/videos/{id}`   | —                                    | `200` `VideoRead`; `401`; `404` unknown or another user's video; `422` invalid id |
+| DELETE | `/api/v1/videos/{id}`   | —                                    | `204`; `401`; `403` untrusted origin (cookie auth); `404`; `500` database failure (nothing deleted); `503` storage misconfigured |
+| GET    | `/api/v1/videos/{id}/media` | — (optional `Range: bytes=...`)  | `307` to a short-lived URL (S3), or `200` whole file / `206` byte range; `401`; `404` (also `media_not_found`); `416` invalid or unsatisfiable range; `503` storage failure |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an

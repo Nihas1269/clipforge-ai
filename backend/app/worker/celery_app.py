@@ -14,12 +14,17 @@ from celery import Celery
 from app.core.config import Settings, get_settings
 
 # Modules imported by the worker so their tasks are registered.
-TASK_MODULES = ("app.worker.jobs",)
+TASK_MODULES = ("app.worker.jobs", "app.worker.storage_cleanup")
 
 # Name of the periodic task that fails jobs left running by a lost worker
 # (see app.worker.jobs.fail_stale_jobs).
 FAIL_STALE_JOBS_TASK_NAME = "app.worker.jobs.fail_stale_jobs"
 FAIL_STALE_JOBS_INTERVAL_SECONDS = 300.0
+
+# Name of the periodic task that retries stored-object deletions that failed
+# (see app.services.storage_cleanup).
+RETRY_STORAGE_DELETIONS_TASK_NAME = "app.worker.storage_cleanup.retry_storage_deletions"
+RETRY_STORAGE_DELETIONS_INTERVAL_SECONDS = 600.0
 
 # Connection and socket timeouts for Redis, so publishing a job never hangs
 # a request when the broker is down.
@@ -83,7 +88,11 @@ def configure_celery_app(app: Celery, settings: Settings) -> Celery:
             "fail-stale-jobs": {
                 "task": FAIL_STALE_JOBS_TASK_NAME,
                 "schedule": FAIL_STALE_JOBS_INTERVAL_SECONDS,
-            }
+            },
+            "retry-storage-deletions": {
+                "task": RETRY_STORAGE_DELETIONS_TASK_NAME,
+                "schedule": RETRY_STORAGE_DELETIONS_INTERVAL_SECONDS,
+            },
         },
     )
     return app

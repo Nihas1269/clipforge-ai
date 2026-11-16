@@ -1,7 +1,8 @@
-"""Shared API dependencies: the auth cookie, the current user, email delivery
-and the account-flow rate limiters."""
+"""Shared API dependencies: the auth cookie, the current user, the current
+user's videos, email delivery and the account-flow rate limiters."""
 
 import logging
+import uuid
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, Response
@@ -15,7 +16,9 @@ from app.core.rate_limit import InMemoryRateLimiter
 from app.core.security import InvalidAccessTokenError, decode_access_token
 from app.database import get_db
 from app.models.user import User
+from app.models.video import Video
 from app.repositories.users import get_by_id
+from app.repositories.videos import get_video_for_user
 from app.services.email import EmailNotConfiguredError, EmailSender, build_email_sender
 
 logger = logging.getLogger(__name__)
@@ -188,6 +191,22 @@ def get_current_user(
         logger.info("access_token_rejected", extra={"user_id": str(payload.user_id)})
         raise _unauthorized()
     return user
+
+
+def get_owned_video(
+    video_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Video:
+    """Return the `{video_id}` video if it belongs to the current user.
+
+    Another user's video gets the same 404 as one that does not exist, so its
+    existence is never revealed. Unauthenticated requests get 401 first.
+    """
+    video = get_video_for_user(db, video_id, user.id)
+    if video is None:
+        raise AppError(404, "not_found", "Video not found.")
+    return video
 
 
 def get_current_admin(user: User = Depends(get_current_user)) -> User:
