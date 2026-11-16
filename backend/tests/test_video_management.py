@@ -208,16 +208,22 @@ def test_every_endpoint_requires_authentication(
     ("method", "suffix"),
     [("get", "/{id}"), ("delete", "/{id}"), ("get", "/{id}/media")],
 )
-def test_other_users_video_is_not_found(client, db, storage, alice, bob, method, suffix):
+def test_other_users_video_is_not_found(
+    client, db, storage, alice, bob, method, suffix
+):
     user, _ = alice
     _, bob_token = bob
     video = _video(db, storage, user)
 
     other = client.request(
-        method.upper(), VIDEOS_URL + suffix.format(id=video.id), headers=_bearer(bob_token)
+        method.upper(),
+        VIDEOS_URL + suffix.format(id=video.id),
+        headers=_bearer(bob_token),
     )
     missing = client.request(
-        method.upper(), VIDEOS_URL + suffix.format(id=uuid.uuid4()), headers=_bearer(bob_token)
+        method.upper(),
+        VIDEOS_URL + suffix.format(id=uuid.uuid4()),
+        headers=_bearer(bob_token),
     )
 
     assert other.status_code == 404
@@ -252,7 +258,14 @@ def test_invalid_video_id_returns_422(client, alice, suffix):
 def _videos_at(db, storage, user, count, **values):
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [
-        _video(db, storage, user, store=False, created_at=base + timedelta(minutes=i), **values)
+        _video(
+            db,
+            storage,
+            user,
+            store=False,
+            created_at=base + timedelta(minutes=i),
+            **values,
+        )
         for i in range(count)
     ]
 
@@ -264,7 +277,9 @@ def test_list_is_paginated_newest_first(client, db, storage, alice, bob):
     newest_first = [str(v.id) for v in reversed(videos)]
 
     pages = [
-        client.get(VIDEOS_URL, params={"limit": 2, "offset": offset}, headers=_bearer(token))
+        client.get(
+            VIDEOS_URL, params={"limit": 2, "offset": offset}, headers=_bearer(token)
+        )
         for offset in (0, 2, 4, 10)
     ]
 
@@ -304,7 +319,9 @@ def test_list_filters_by_status(client, db, storage, alice):
     ready = _videos_at(db, storage, user, 2, status=VideoStatus.READY)
     _videos_at(db, storage, user, 3, status=VideoStatus.UPLOADED)
 
-    body = client.get(VIDEOS_URL, params={"status": "ready"}, headers=_bearer(token)).json()
+    body = client.get(
+        VIDEOS_URL, params={"status": "ready"}, headers=_bearer(token)
+    ).json()
 
     assert body["total"] == 2
     assert {item["id"] for item in body["items"]} == {str(v.id) for v in ready}
@@ -315,7 +332,13 @@ def test_list_filters_by_status(client, db, storage, alice):
 
 @pytest.mark.parametrize(
     "params",
-    [{"limit": 0}, {"limit": 101}, {"limit": "x"}, {"offset": -1}, {"status": "archived"}],
+    [
+        {"limit": 0},
+        {"limit": 101},
+        {"limit": "x"},
+        {"offset": -1},
+        {"status": "archived"},
+    ],
 )
 def test_list_rejects_invalid_parameters(client, alice, params):
     _, token = alice
@@ -373,7 +396,10 @@ def test_delete_removes_row_jobs_and_file(client, db, storage, alice):
     # Other videos are untouched.
     assert _video_exists(db, other.id)
     assert storage.exists(other.storage_key)
-    assert client.get(f"{VIDEOS_URL}/{video.id}", headers=_bearer(token)).status_code == 404
+    assert (
+        client.get(f"{VIDEOS_URL}/{video.id}", headers=_bearer(token)).status_code
+        == 404
+    )
     again = client.delete(f"{VIDEOS_URL}/{video.id}", headers=_bearer(token))
     assert again.status_code == 404
 
@@ -417,7 +443,9 @@ def test_failed_file_deletion_is_recorded_and_retried(
     assert pending.attempts == 1
     assert pending.last_error_type == "StorageError"
     assert pending.last_attempt_at is not None
-    failures = [r for r in caplog.records if r.getMessage() == "storage_deletion_failed"]
+    failures = [
+        r for r in caplog.records if r.getMessage() == "storage_deletion_failed"
+    ]
     assert len(failures) == 1
     assert failures[0].error_type == "StorageError"
     assert video.storage_key not in caplog.text
@@ -462,7 +490,9 @@ def test_database_failure_deletes_nothing(client, session_factory, db, storage, 
     assert _count(db, PendingStorageDeletion) == 0
 
 
-def test_cookie_authenticated_delete_requires_trusted_origin(client, db, storage, alice):
+def test_cookie_authenticated_delete_requires_trusted_origin(
+    client, db, storage, alice
+):
     user, token = alice
     video = _video(db, storage, user)
     client.cookies.set("access_token", token)
@@ -471,7 +501,9 @@ def test_cookie_authenticated_delete_requires_trusted_origin(client, db, storage
     assert evil.status_code == 403
     assert _video_exists(db, video.id)
 
-    trusted = client.delete(f"{VIDEOS_URL}/{video.id}", headers={"Origin": FRONTEND_ORIGIN})
+    trusted = client.delete(
+        f"{VIDEOS_URL}/{video.id}", headers={"Origin": FRONTEND_ORIGIN}
+    )
     assert trusted.status_code == 204
     assert not _video_exists(db, video.id)
 
@@ -539,7 +571,15 @@ def test_media_range_forms(client, db, storage, alice, header, start, end):
 
 @pytest.mark.parametrize(
     "header",
-    ["bytes=1024-", "bytes=5000-6000", "bytes=-0", "bytes=9-5", "bytes=abc", "items=0-9", "bytes="],
+    [
+        "bytes=1024-",
+        "bytes=5000-6000",
+        "bytes=-0",
+        "bytes=9-5",
+        "bytes=abc",
+        "items=0-9",
+        "bytes=",
+    ],
 )
 def test_invalid_or_unsatisfiable_range_returns_416(client, db, storage, alice, header):
     user, token = alice
@@ -683,7 +723,9 @@ class FakeUrlStorage(LocalStorage):
         return f"{FAKE_URL_HOST}/object?X-Amz-Expires={expires_seconds}&X-Amz-Signature=fake"
 
 
-def test_media_redirects_to_short_lived_url(client, db, storage, storage_dir, alice, bob):
+def test_media_redirects_to_short_lived_url(
+    client, db, storage, storage_dir, alice, bob
+):
     user, token = alice
     _, bob_token = bob
     video = _video(db, storage, user)
@@ -703,7 +745,9 @@ def test_media_redirects_to_short_lived_url(client, db, storage, storage_dir, al
 
     # Another user never gets a URL.
     other = client.get(
-        f"{VIDEOS_URL}/{video.id}/media", headers=_bearer(bob_token), follow_redirects=False
+        f"{VIDEOS_URL}/{video.id}/media",
+        headers=_bearer(bob_token),
+        follow_redirects=False,
     )
     assert other.status_code == 404
     assert len(fake.url_requests) == 1
@@ -717,7 +761,9 @@ class BrokenUrlStorage(LocalStorage):
 def test_media_url_failure_returns_503(client, db, storage, storage_dir, alice):
     user, token = alice
     video = _video(db, storage, user)
-    client.app.dependency_overrides[get_video_storage] = lambda: BrokenUrlStorage(storage_dir)
+    client.app.dependency_overrides[get_video_storage] = lambda: BrokenUrlStorage(
+        storage_dir
+    )
 
     response = _media(client, video, token)
 
@@ -729,7 +775,9 @@ def test_media_url_failure_returns_503(client, db, storage, storage_dir, alice):
 # Storage cleanup worker
 
 
-def test_retry_task_deletes_pending_objects(session_factory, db, storage, storage_dir, monkeypatch):
+def test_retry_task_deletes_pending_objects(
+    session_factory, db, storage, storage_dir, monkeypatch
+):
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("LOCAL_STORAGE_DIR", str(storage_dir))
     get_settings.cache_clear()
@@ -749,7 +797,10 @@ def test_retry_task_deletes_pending_objects(session_factory, db, storage, storag
 
 def test_retry_task_is_scheduled():
     schedule = celery_app.conf.beat_schedule
-    assert any(entry["task"] == RETRY_STORAGE_DELETIONS_TASK_NAME for entry in schedule.values())
+    assert any(
+        entry["task"] == RETRY_STORAGE_DELETIONS_TASK_NAME
+        for entry in schedule.values()
+    )
 
 
 def test_retry_rejects_non_positive_limit(db, storage):

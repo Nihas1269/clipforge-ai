@@ -9,6 +9,10 @@ alembic>=1.13,<2.0
 argon2-cffi>=23.1,<26.0
 PyJWT>=2.8,<3.0
 email-validator>=2.0,<3.0
+# Transitive dependency of email-validator, raised to 2.9.2 for the security
+# advisories against older releases. dnspython 2.9.x requires Python 3.11+,
+# which is why the backend requires Python 3.11 or newer.
+dnspython>=2.9.2,<3.0
 boto3>=1.34,<2.0
 python-multipart>=0.0.18,<0.1
 celery[redis]>=5.3,<6.0

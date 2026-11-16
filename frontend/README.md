@@ -10,7 +10,8 @@ and jsdom.
 ## Requirements
 
 - **Node.js 24 (LTS)**. The version is pinned in [`.nvmrc`](.nvmrc), and the
-  CI workflow (`.github/workflows/frontend.yml`) reads the same file. With
+  `frontend` job of the CI workflow (`.github/workflows/ci.yml`) reads the
+  same file. With
   [nvm](https://github.com/nvm-sh/nvm) or
   [fnm](https://github.com/Schniz/fnm), run `nvm use` / `fnm use` in this
   directory.

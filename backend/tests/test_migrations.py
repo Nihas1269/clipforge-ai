@@ -90,21 +90,21 @@ def test_migrated_schema_matches_models(database_url, engine):
     command.upgrade(make_config(database_url), "head")
 
     with engine.connect() as connection:
-        context = MigrationContext.configure(
-            connection, opts={"compare_type": False}
-        )
+        context = MigrationContext.configure(connection, opts={"compare_type": False})
         assert compare_metadata(context, Base.metadata) == []
 
 
-def test_migrated_schema_enforces_case_insensitive_unique_email(
-    database_url, engine
-):
+def test_migrated_schema_enforces_case_insensitive_unique_email(database_url, engine):
     command.upgrade(make_config(database_url), "head")
 
     with engine.begin() as connection:
         connection.execute(
             INSERT_USER,
-            {"id": uuid.uuid4().hex, "email": "alice@example.com", "hashed_password": "x"},
+            {
+                "id": uuid.uuid4().hex,
+                "email": "alice@example.com",
+                "hashed_password": "x",
+            },
         )
         row = connection.execute(
             text(
@@ -171,7 +171,11 @@ def test_downgrade_one_step_removes_auth_tokens_and_keeps_users(database_url, en
         with engine.begin() as connection:
             connection.execute(
                 INSERT_USER,
-                {"id": uuid.uuid4().hex, "email": "Alice@Example.com", "hashed_password": "x"},
+                {
+                    "id": uuid.uuid4().hex,
+                    "email": "Alice@Example.com",
+                    "hashed_password": "x",
+                },
             )
 
 
@@ -235,9 +239,7 @@ def test_upgrade_creates_videos_table(database_url, engine):
     assert foreign_key["options"].get("ondelete") == "CASCADE"
 
 
-def test_migrated_videos_table_applies_defaults_and_constraints(
-    database_url, engine
-):
+def test_migrated_videos_table_applies_defaults_and_constraints(database_url, engine):
     command.upgrade(make_config(database_url), "head")
     user_id = uuid.uuid4().hex
 
@@ -330,7 +332,9 @@ def test_upgrade_creates_processing_jobs_table(database_url, engine):
     }
     assert indexes["ix_processing_jobs_active_key"]["unique"]
     assert not indexes["ix_processing_jobs_user_id"]["unique"]
-    referred = {fk["referred_table"] for fk in inspector.get_foreign_keys("processing_jobs")}
+    referred = {
+        fk["referred_table"] for fk in inspector.get_foreign_keys("processing_jobs")
+    }
     assert referred == {"users", "videos"}
 
 
@@ -347,7 +351,9 @@ def test_migrated_processing_jobs_table_enforces_constraints(database_url, engin
             {"id": uuid.uuid4().hex},
         )
         row = connection.execute(
-            text("SELECT status, attempts, max_attempts, created_at FROM processing_jobs")
+            text(
+                "SELECT status, attempts, max_attempts, created_at FROM processing_jobs"
+            )
         ).one()
     assert row.status == "queued"
     assert row.attempts == 0
@@ -367,13 +373,23 @@ def test_migrated_processing_jobs_table_enforces_constraints(database_url, engin
     with engine.begin() as connection:
         connection.execute(
             insert_job,
-            {"id": uuid.uuid4().hex, "job_type": "render", "status": "queued", "active_key": "render:k"},
+            {
+                "id": uuid.uuid4().hex,
+                "job_type": "render",
+                "status": "queued",
+                "active_key": "render:k",
+            },
         )
     with pytest.raises(IntegrityError):
         with engine.begin() as connection:
             connection.execute(
                 insert_job,
-                {"id": uuid.uuid4().hex, "job_type": "render", "status": "queued", "active_key": "render:k"},
+                {
+                    "id": uuid.uuid4().hex,
+                    "job_type": "render",
+                    "status": "queued",
+                    "active_key": "render:k",
+                },
             )
 
 
