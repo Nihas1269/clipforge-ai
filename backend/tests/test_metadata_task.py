@@ -19,7 +19,12 @@ import app.models  # noqa: F401  (registers every model on Base.metadata)
 from app import database
 from app.core.config import Settings, get_settings
 from app.database import Base, create_db_engine, create_session_factory
-from app.media.ffmpeg import FFmpegNotFoundError, MediaError, MediaInfo, MediaTimeoutError
+from app.media.ffmpeg import (
+    FFmpegNotFoundError,
+    MediaError,
+    MediaInfo,
+    MediaTimeoutError,
+)
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.user import User
 from app.models.video import Video, VideoStatus
@@ -126,7 +131,9 @@ def probe_calls(monkeypatch):
     return state
 
 
-def _make_video(db, storage, content=MP4_HEADER + b"\x00" * 100, *, key=None, store=True):
+def _make_video(
+    db, storage, content=MP4_HEADER + b"\x00" * 100, *, key=None, store=True
+):
     user = User(email=f"{uuid.uuid4().hex}@example.com", hashed_password="x")
     db.add(user)
     db.commit()
@@ -189,7 +196,9 @@ def test_metadata_task_saves_metadata_and_marks_ready(db, storage, probe_calls):
     assert probe_calls["paths"] == [(storage.root / video.storage_key).resolve()]
 
 
-def test_video_at_exact_duration_limit_is_accepted(db, storage, probe_calls, monkeypatch):
+def test_video_at_exact_duration_limit_is_accepted(
+    db, storage, probe_calls, monkeypatch
+):
     monkeypatch.setenv("MAX_VIDEO_DURATION_SECONDS", "60")
     get_settings.cache_clear()
     probe_calls["result"] = MediaInfo(60.0, 640, 360, 30.0, True, False, "h264", None)
@@ -248,7 +257,10 @@ def test_task_is_registered_with_bounded_time_limits():
 @pytest.mark.parametrize(
     ("result", "message"),
     [
-        (MediaError("Invalid data found", "moov atom not found"), INVALID_VIDEO_MESSAGE),
+        (
+            MediaError("Invalid data found", "moov atom not found"),
+            INVALID_VIDEO_MESSAGE,
+        ),
         (FFmpegNotFoundError("'ffprobe' was not found"), FFMPEG_UNAVAILABLE_MESSAGE),
         (MediaTimeoutError("ffprobe did not finish"), PROBE_TIMEOUT_MESSAGE),
         (
@@ -265,7 +277,9 @@ def test_task_is_registered_with_bounded_time_limits():
         ),
     ],
 )
-def test_unusable_file_marks_video_and_job_failed(db, storage, probe_calls, result, message):
+def test_unusable_file_marks_video_and_job_failed(
+    db, storage, probe_calls, result, message
+):
     probe_calls["result"] = result
     video = _make_video(db, storage)
 
@@ -307,7 +321,9 @@ def test_storage_key_outside_the_videos_own_prefix_is_refused(db, storage, probe
     assert probe_calls["paths"] == []
 
 
-def test_local_path_outside_the_storage_root_is_refused(db, storage, probe_calls, tmp_path):
+def test_local_path_outside_the_storage_root_is_refused(
+    db, storage, probe_calls, tmp_path
+):
     outside = tmp_path / "outside.mp4"
     outside.write_bytes(b"x")
 
@@ -343,7 +359,9 @@ def test_unexpected_error_fails_the_video_instead_of_leaving_it_processing(
     assert stored_job.error_message == "The job failed unexpectedly (RuntimeError)."
 
 
-def test_temporary_read_error_is_retried_then_succeeds(db, storage, probe_calls, monkeypatch):
+def test_temporary_read_error_is_retried_then_succeeds(
+    db, storage, probe_calls, monkeypatch
+):
     attempts = []
     original = LocalStorage.local_path
 
@@ -364,7 +382,9 @@ def test_temporary_read_error_is_retried_then_succeeds(db, storage, probe_calls,
     assert _read(Video, video.id).status is VideoStatus.READY
 
 
-def test_persistent_read_error_fails_after_the_last_attempt(db, storage, probe_calls, monkeypatch):
+def test_persistent_read_error_fails_after_the_last_attempt(
+    db, storage, probe_calls, monkeypatch
+):
     def broken_local_path(self, key):
         raise OSError("disk gone")
 
@@ -429,7 +449,9 @@ def test_payload_must_match_the_jobs_video(db, storage, probe_calls):
     assert _read(Video, video.id).status is VideoStatus.UPLOADED
 
 
-def test_queue_failure_marks_job_and_video_failed(db, storage, probe_calls, monkeypatch):
+def test_queue_failure_marks_job_and_video_failed(
+    db, storage, probe_calls, monkeypatch
+):
     monkeypatch.setitem(celery_app.conf, "task_always_eager", False)
     monkeypatch.setitem(celery_app.conf, "broker_url", None)
     video = _make_video(db, storage)
@@ -448,7 +470,9 @@ def test_queue_failure_marks_job_and_video_failed(db, storage, probe_calls, monk
 def test_lost_worker_fails_the_job_and_the_processing_video(db, storage):
     video = _make_video(db, storage)
     video.status = VideoStatus.PROCESSING
-    started = datetime.now(timezone.utc) - jobs.STALE_RUNNING_AFTER - timedelta(minutes=1)
+    started = (
+        datetime.now(timezone.utc) - jobs.STALE_RUNNING_AFTER - timedelta(minutes=1)
+    )
     job = ProcessingJob(
         job_type=JobType.METADATA,
         status=JobStatus.RUNNING,
@@ -470,7 +494,9 @@ def test_lost_worker_fails_the_job_and_the_processing_video(db, storage):
     assert _read(ProcessingJob, job.id).status == JobStatus.FAILED
 
 
-def test_logs_do_not_contain_file_names_or_tool_output(db, storage, probe_calls, caplog):
+def test_logs_do_not_contain_file_names_or_tool_output(
+    db, storage, probe_calls, caplog
+):
     caplog.set_level(logging.DEBUG)
     probe_calls["result"] = MediaError("bad", "PRIVATE-TOOL-OUTPUT")
     failing = _make_video(db, storage)
@@ -528,7 +554,9 @@ def test_audio_only_upload_ends_in_failed(db, storage, tmp_path):
 
 
 @requires_ffmpeg
-def test_real_video_over_duration_limit_ends_in_failed(db, storage, tmp_path, monkeypatch):
+def test_real_video_over_duration_limit_ends_in_failed(
+    db, storage, tmp_path, monkeypatch
+):
     monkeypatch.setenv("MAX_VIDEO_DURATION_SECONDS", "1")
     get_settings.cache_clear()
     source = make_test_video(tmp_path / "sample.mp4")

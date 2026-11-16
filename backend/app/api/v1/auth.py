@@ -37,7 +37,11 @@ from app.api.deps import (
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.rate_limit import RateLimitExceededError
-from app.core.security import create_access_token, verify_password, verify_password_dummy
+from app.core.security import (
+    create_access_token,
+    verify_password,
+    verify_password_dummy,
+)
 from app.database import get_db
 from app.models.user import User
 from app.repositories.auth_tokens import InvalidOneTimeTokenError
@@ -128,9 +132,7 @@ def register(
     # Best effort: the account exists either way, and the user can ask for a
     # new verification email (POST /auth/verify-email/request).
     if email_sender is None:
-        logger.warning(
-            "email_verification_not_sent", extra={"user_id": str(user.id)}
-        )
+        logger.warning("email_verification_not_sent", extra={"user_id": str(user.id)})
         return public_user
     outbox = OutboxEmailSender()
     try:
@@ -143,9 +145,7 @@ def register(
         )
     except Exception:  # noqa: BLE001 - registration already succeeded
         db.rollback()
-        logger.exception(
-            "email_verification_not_sent", extra={"user_id": str(user.id)}
-        )
+        logger.exception("email_verification_not_sent", extra={"user_id": str(user.id)})
         return public_user
     background_tasks.add_task(deliver_all, email_sender, outbox.messages)
     return public_user
@@ -286,7 +286,9 @@ def request_password_reset(
     """
     outbox = OutboxEmailSender()
     try:
-        limiters.attempts.hit(f"password_reset_request_client:{client_address(request)}")
+        limiters.attempts.hit(
+            f"password_reset_request_client:{client_address(request)}"
+        )
         account_tokens.request_password_reset(
             db,
             payload.email,

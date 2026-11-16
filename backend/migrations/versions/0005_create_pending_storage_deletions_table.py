@@ -5,6 +5,7 @@ Revises: 0004
 Create Date: 2026-11-17
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -21,7 +22,9 @@ def upgrade() -> None:
         "pending_storage_deletions",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("storage_key", sa.String(length=1024), nullable=False),
-        sa.Column("attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column(
+            "attempts", sa.Integer(), server_default=sa.text("0"), nullable=False
+        ),
         sa.Column("last_error_type", sa.String(length=100), nullable=True),
         sa.Column(
             "created_at",
@@ -45,6 +48,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "ix_pending_storage_deletions_created_at", table_name="pending_storage_deletions"
+        "ix_pending_storage_deletions_created_at",
+        table_name="pending_storage_deletions",
     )
     op.drop_table("pending_storage_deletions")

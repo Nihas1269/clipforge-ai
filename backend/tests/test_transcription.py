@@ -189,9 +189,9 @@ def test_fake_provider_is_deterministic(audio_file):
 
 @pytest.mark.parametrize("duration", [0.3, 1.0, 4.999, 5.0, 12.5, 47.3, 3600.25])
 def test_fake_segments_are_increasing_and_within_the_duration(audio_file, duration):
-    result = FakeTranscriptionProvider(duration_probe=fixed_duration(duration)).transcribe(
-        audio_file
-    )
+    result = FakeTranscriptionProvider(
+        duration_probe=fixed_duration(duration)
+    ).transcribe(audio_file)
 
     assert result.segments
     assert_well_formed(result, duration)
@@ -225,9 +225,9 @@ def test_very_short_audio_gives_one_segment(audio_file):
 
 @pytest.mark.parametrize("duration", [0.0, 0.0004])
 def test_silent_or_empty_audio_gives_zero_segments(audio_file, duration):
-    result = FakeTranscriptionProvider(duration_probe=fixed_duration(duration)).transcribe(
-        audio_file
-    )
+    result = FakeTranscriptionProvider(
+        duration_probe=fixed_duration(duration)
+    ).transcribe(audio_file)
 
     assert result.segments == ()
     assert result.full_text == ""
@@ -341,7 +341,9 @@ def test_fake_provider_logs_without_transcript_text(audio_file, caplog):
     with caplog.at_level(logging.INFO, logger="app.transcription.fake"):
         provider.transcribe(audio_file)
 
-    (record,) = [r for r in caplog.records if r.getMessage() == "transcription_completed"]
+    (record,) = [
+        r for r in caplog.records if r.getMessage() == "transcription_completed"
+    ]
     assert record.provider == "fake"
     assert record.segment_count == 1
     assert "PRIVATE-WORDS" not in caplog.text

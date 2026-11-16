@@ -31,7 +31,12 @@ def _encode(claims, secret=SECRET, algorithm="HS256"):
 
 def _valid_claims(user_id):
     now = datetime.now(timezone.utc)
-    return {"sub": str(user_id), "iat": now, "exp": now + timedelta(minutes=5), "ver": 0}
+    return {
+        "sub": str(user_id),
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "ver": 0,
+    }
 
 
 def test_hash_password_differs_from_plaintext():
@@ -126,7 +131,9 @@ def test_decode_access_token_rejects_expired_token(settings):
 
 
 def test_decode_access_token_rejects_wrong_secret(settings):
-    token = _encode(_valid_claims(uuid.uuid4()), secret="another-secret-0123456789abcdef!")
+    token = _encode(
+        _valid_claims(uuid.uuid4()), secret="another-secret-0123456789abcdef!"
+    )
 
     with pytest.raises(InvalidAccessTokenError):
         decode_access_token(token, settings=settings)

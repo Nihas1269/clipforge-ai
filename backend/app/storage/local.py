@@ -38,7 +38,9 @@ class LocalStorage(StorageBackend):
         validate_key(key)
         path = (self.root / key).resolve()
         if path == self.root or not path.is_relative_to(self.root):
-            raise InvalidStorageKeyError("Storage key resolves outside the storage root.")
+            raise InvalidStorageKeyError(
+                "Storage key resolves outside the storage root."
+            )
         return path
 
     def _existing_file(self, key: str) -> Path:
@@ -57,7 +59,9 @@ class LocalStorage(StorageBackend):
         # Write to a temporary file in the same directory and move it into
         # place only when complete, so a failed upload never leaves a partial
         # object behind. The "." prefix can never match a valid key.
-        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".upload-", suffix=".tmp")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent, prefix=".upload-", suffix=".tmp"
+        )
         tmp_path = Path(tmp_name)
         written = 0
         try:
@@ -91,7 +95,9 @@ class LocalStorage(StorageBackend):
     def delete(self, key: str) -> None:
         path = self._resolve(key)
         if path.is_dir():
-            raise InvalidStorageKeyError("Storage key refers to a directory, not an object.")
+            raise InvalidStorageKeyError(
+                "Storage key refers to a directory, not an object."
+            )
         try:
             path.unlink()
         except FileNotFoundError:

@@ -225,7 +225,9 @@ def _run(
 
 def _as_arguments(args: Sequence[str | os.PathLike[str]]) -> list[str]:
     if isinstance(args, (str, bytes)) or not isinstance(args, Sequence):
-        raise TypeError("FFmpeg arguments must be a list of strings, not a command line.")
+        raise TypeError(
+            "FFmpeg arguments must be a list of strings, not a command line."
+        )
     arguments = []
     for arg in args:
         if isinstance(arg, os.PathLike):
@@ -272,7 +274,9 @@ def run_ffmpeg(
         tool="ffmpeg",
     )
     if result.returncode != 0:
-        raise MediaError(f"ffmpeg failed with exit code {result.returncode}.", result.stderr)
+        raise MediaError(
+            f"ffmpeg failed with exit code {result.returncode}.", result.stderr
+        )
     return result
 
 

@@ -1,0 +1,14 @@
+# Reviewed gitleaks false positives (exact fingerprints: commit:file:rule:line).
+# Each entry needs a comment explaining why it is not a secret. Never quote the
+# flagged value in a comment here: gitleaks scans this file too.
+
+# backend/tests/test_email.py line 23: the TOKEN constant is a made-up
+# verification/reset token used only as test data (issue #23). It was never a
+# credential. Listed for the squash commit on main and the issue branch commit.
+dbed1e7336a396439e90d15217550c3d67aa2673:backend/tests/test_email.py:generic-api-key:23
+4f27bb385d1203ac4738a9d84b7447aa19fc2b86:backend/tests/test_email.py:generic-api-key:23
+
+# .gitleaksignore line 4 in commit 38f519d (kept, closed branch for #17 -r2):
+# an earlier version of the comment above quoted the same made-up test token.
+# Not a credential; the comment was reworded in later commits.
+38f519dd4bf106103deba903af8c9342157eac19:.gitleaksignore:generic-api-key:4

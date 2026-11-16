@@ -98,7 +98,9 @@ def client(make_client):
 
 
 def _register(client, email="alice@example.com", password=PASSWORD, **extra):
-    return client.post(REGISTER_URL, json={"email": email, "password": password, **extra})
+    return client.post(
+        REGISTER_URL, json={"email": email, "password": password, **extra}
+    )
 
 
 def _login(client, email="alice@example.com", password=PASSWORD, **kwargs):
@@ -110,7 +112,9 @@ def _set_cookie_headers(response) -> list[str]:
 
 
 def _access_token_cookie_header(response) -> str:
-    headers = [h for h in _set_cookie_headers(response) if h.startswith("access_token=")]
+    headers = [
+        h for h in _set_cookie_headers(response) if h.startswith("access_token=")
+    ]
     assert len(headers) == 1
     return headers[0]
 
@@ -311,7 +315,9 @@ def test_inactive_user_cannot_log_in(client, db):
 
 
 def test_login_missing_fields_returns_422(client):
-    assert client.post(LOGIN_URL, json={"email": "alice@example.com"}).status_code == 422
+    assert (
+        client.post(LOGIN_URL, json={"email": "alice@example.com"}).status_code == 422
+    )
 
 
 def test_login_logs_do_not_contain_password_or_token(client, caplog):
@@ -450,7 +456,9 @@ def test_password_reset_invalidates_existing_access_tokens(client, db):
         "access_token"
     ]
     assert (
-        client.get("/test/me", headers={"Authorization": f"Bearer {new_token}"}).status_code
+        client.get(
+            "/test/me", headers={"Authorization": f"Bearer {new_token}"}
+        ).status_code
         == 200
     )
 
@@ -469,7 +477,9 @@ def test_tokens_signed_with_another_secret_are_rejected(client, db):
 # CSRF protection
 
 
-@pytest.mark.parametrize("origin", [SELF_ORIGIN, FRONTEND_ORIGIN, "HTTP://LOCALHOST:3000"])
+@pytest.mark.parametrize(
+    "origin", [SELF_ORIGIN, FRONTEND_ORIGIN, "HTTP://LOCALHOST:3000"]
+)
 def test_login_from_trusted_origin_is_allowed(client, origin):
     _register(client)
 

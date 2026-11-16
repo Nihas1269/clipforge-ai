@@ -17,7 +17,9 @@ class UserCreate(BaseModel):
 
     # email-validator also enforces the RFC length limits.
     email: EmailStr
-    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+    password: str = Field(
+        min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
     full_name: str | None = Field(default=None, max_length=FULL_NAME_MAX_LENGTH)
 
     @field_validator("email", mode="before")
