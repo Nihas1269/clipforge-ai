@@ -68,7 +68,8 @@ Copy-Item .env.example .env
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30`                     | Access token lifetime in minutes (must be positive).         |
 | `CORS_ORIGINS`                | empty                    | Comma-separated list of allowed origins (see below).         |
 | `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (must be positive).         |
-| `STORAGE_BACKEND`             | `local`                  | `local` or `s3`.                                             |
+| `STORAGE_BACKEND`             | `local`                  | `local` or `s3` (see Storage below).                         |
+| `LOCAL_STORAGE_DIR`           | `backend/storage`        | Root directory of the local storage backend.                 |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -138,6 +139,39 @@ from app.database import get_db
 def example(db: Session = Depends(get_db)):
     ...
 ```
+
+## Storage
+
+Video files, audio and exports are stored through the `StorageBackend`
+interface in `app/storage/base.py`. Obtain the configured backend with
+`get_storage()` from `app.storage`; build keys with helpers such as
+`video_source_key(user_id, video_id, ".mp4")`, which returns
+`users/{user_id}/videos/{video_id}/source.mp4`.
+
+- `save(key, fileobj, max_bytes=None)` streams the data in 1 MiB chunks to a
+  temporary file and moves it into place when complete; it returns the number
+  of bytes written. With `max_bytes`, larger data is rejected and nothing is
+  stored.
+- `open`, `exists`, `delete`, `size` work on stored objects; `delete` of a
+  missing object is a no-op.
+- `get_download_url(key, expires_seconds)` returns `None` when the API must
+  stream the file itself (always the case for local storage).
+- `local_path(key)` is a context manager yielding a local file path for
+  FFmpeg (a temporary copy for remote backends). Treat it as read-only.
+
+Only `STORAGE_BACKEND=local` is implemented; `s3` raises
+`StorageConfigurationError` from `get_storage()`. The local backend keeps files
+under `LOCAL_STORAGE_DIR` (default `backend/storage`, git-ignored). It rejects
+keys that are empty, contain `..` or backslashes, are absolute, or contain
+characters outside `A-Z a-z 0-9 . _ -` and `/`, have a segment ending in `.`
+or a Windows device name (`CON`, `NUL`, `COM1`, ...), and it resolves every path
+(following symlinks) and checks that it stays beneath the root before reading,
+writing or deleting. The storage directory is never served as static files.
+
+Limitations: the containment check happens before each file operation, so a
+process that can already write inside the storage root could still race it
+by swapping a directory for a symlink in between. Keep the storage directory
+writable only by the backend.
 
 ## Database migrations
 
