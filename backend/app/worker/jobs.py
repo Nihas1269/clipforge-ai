@@ -81,8 +81,7 @@ TIMEOUT_MESSAGE = "The job timed out."
 DISPATCH_FAILURE_MESSAGE = "The job could not be queued. Try again later."
 RETRY_DISPATCH_FAILURE_MESSAGE = "The job failed and its retry could not be queued."
 STALE_JOB_MESSAGE = (
-    "The job was interrupted before it finished (for example by a worker "
-    "restart)."
+    "The job was interrupted before it finished (for example by a worker restart)."
 )
 STALE_VIDEO_MESSAGE = "Processing was interrupted. Try again later."
 
@@ -190,7 +189,9 @@ def validate_job_payload(payload: Mapping[str, Any] | None) -> dict[str, Any] | 
     try:
         encoded = json.dumps(dict(payload), allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError):
-        raise InvalidJobPayloadError("The job payload must be JSON serializable.") from None
+        raise InvalidJobPayloadError(
+            "The job payload must be JSON serializable."
+        ) from None
     if len(encoded.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise InvalidJobPayloadError(
             f"The job payload must be at most {MAX_PAYLOAD_BYTES} bytes."
@@ -438,7 +439,9 @@ def _claim(job_id: uuid.UUID) -> tuple[JobContext, datetime | None, datetime] | 
         return context, job.created_at, started_at
 
 
-def _run_job(task: JobTask, raw_job_id: Any, function: Callable[[JobContext], Any]) -> Any:
+def _run_job(
+    task: JobTask, raw_job_id: Any, function: Callable[[JobContext], Any]
+) -> Any:
     try:
         job_id = uuid.UUID(str(raw_job_id))
     except ValueError:
@@ -496,7 +499,11 @@ def _handle_failure(
     duration_ms = _milliseconds(started_at, _utcnow())
     error_type = type(exc).__name__
 
-    if isinstance(exc, JobError) and exc.retryable and context.attempt < context.max_attempts:
+    if (
+        isinstance(exc, JobError)
+        and exc.retryable
+        and context.attempt < context.max_attempts
+    ):
         with _job_session() as db:
             requeued = _update_job(
                 db,
@@ -541,7 +548,9 @@ def _handle_failure(
                 )
             logger.error(
                 "job_failed",
-                extra=_log_extra(context, attempt=context.attempt, error_type=error_type),
+                extra=_log_extra(
+                    context, attempt=context.attempt, error_type=error_type
+                ),
             )
             raise exc from None
 
@@ -640,7 +649,9 @@ def cancel_job(
         update(ProcessingJob)
         .where(
             ProcessingJob.id == job_id,
-            ProcessingJob.status.in_(sorted(ACTIVE_JOB_STATUSES, key=lambda s: s.value)),
+            ProcessingJob.status.in_(
+                sorted(ACTIVE_JOB_STATUSES, key=lambda s: s.value)
+            ),
         )
         .values(
             status=JobStatus.CANCELLED,
@@ -671,7 +682,9 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
     cutoff = now - STALE_RUNNING_AFTER
     stale = list(
         db.execute(
-            select(ProcessingJob.id, ProcessingJob.job_type, ProcessingJob.video_id).where(
+            select(
+                ProcessingJob.id, ProcessingJob.job_type, ProcessingJob.video_id
+            ).where(
                 ProcessingJob.status == JobStatus.RUNNING,
                 ProcessingJob.started_at < cutoff,
             )

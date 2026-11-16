@@ -43,7 +43,9 @@ _PROVIDERS: dict[str, Callable[[Settings], TranscriptionProvider]] = {
 }
 
 
-def get_transcription_provider(settings: Settings | None = None) -> TranscriptionProvider:
+def get_transcription_provider(
+    settings: Settings | None = None,
+) -> TranscriptionProvider:
     """Return the transcription provider selected by TRANSCRIPTION_PROVIDER.
 
     Raises TranscriptionConfigurationError for an unknown provider name, and

@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Development and CI tooling only; never needed at runtime.
+ruff>=0.12,<0.13
+pip-audit>=2.7,<3
+cyclonedx-bom>=6.0,<8
+PyYAML>=6.0,<7

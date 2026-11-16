@@ -73,7 +73,9 @@ def validate_key(key: object) -> str:
         raise InvalidStorageKeyError("Storage key must be a relative path.")
     for segment in key.split("/"):
         if not _SEGMENT_RE.fullmatch(segment):
-            raise InvalidStorageKeyError("Storage key contains an invalid path segment.")
+            raise InvalidStorageKeyError(
+                "Storage key contains an invalid path segment."
+            )
         # Windows silently strips trailing dots, so "a." would alias "a".
         if segment.endswith("."):
             raise InvalidStorageKeyError("Storage key segments must not end with '.'.")

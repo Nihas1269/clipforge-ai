@@ -1,0 +1,30 @@
+# gitleaks configuration used by the CI `security` job.
+#
+# It extends the default gitleaks rules. The allowlist below covers only
+# values that are intentionally public and documented as non-secret:
+#
+# - clipforge_dev_password: the shared local development credential used by
+#   docker-compose.yml and the .env.example files (see
+#   docs/local-development.md). It only works against services bound to
+#   127.0.0.1 and must never be used in production.
+# - dev-insecure-secret-key-change-me: the development default SECRET_KEY in
+#   backend/app/core/config.py, which is deliberately rejected when
+#   APP_ENV=production.
+# - a-long-random-production-secret-0123456789abcdef: a fixed fake secret used
+#   by backend tests to check that a strong value is accepted.
+#
+# Do not add real credentials here; remove a real secret from the history and
+# rotate it instead.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented public development and test values"
+# Matched against the detected secret value. Not anchored, so the same value
+# is also allowed inside a localhost connection URL.
+regexes = [
+  '''clipforge_dev_password''',
+  '''dev-insecure-secret-key-change-me''',
+  '''a-long-random-production-secret-0123456789abcdef''',
+]

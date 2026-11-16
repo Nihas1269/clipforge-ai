@@ -92,7 +92,9 @@ class WordTiming:
         end = _check_time(self.end, "Word end")
         # A word may be reported with zero length, but never end before it starts.
         if end < start:
-            raise InvalidTranscriptionResultError("A word must not end before it starts.")
+            raise InvalidTranscriptionResultError(
+                "A word must not end before it starts."
+            )
         object.__setattr__(self, "start", start)
         object.__setattr__(self, "end", end)
 

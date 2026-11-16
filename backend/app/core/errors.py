@@ -149,9 +149,10 @@ def _status_phrase(status_code: int) -> str:
 def _status_code_name(status_code: int) -> str:
     """Return a machine-readable code such as "not_found" for a status code."""
     try:
-        return HTTPStatus(status_code).phrase.lower().replace(" ", "_").replace("-", "_")
+        phrase = HTTPStatus(status_code).phrase
     except ValueError:
         return "http_error"
+    return phrase.lower().replace(" ", "_").replace("-", "_")
 
 
 def _without_headers(

@@ -79,7 +79,9 @@ class TranscriptSegment(Base):
         UniqueConstraint(
             "transcript_id", "index", name="uq_transcript_segments_transcript_id_index"
         ),
-        CheckConstraint('"index" >= 0', name="ck_transcript_segments_index_non_negative"),
+        CheckConstraint(
+            '"index" >= 0', name="ck_transcript_segments_index_non_negative"
+        ),
         CheckConstraint(
             "start_seconds >= 0", name="ck_transcript_segments_start_non_negative"
         ),

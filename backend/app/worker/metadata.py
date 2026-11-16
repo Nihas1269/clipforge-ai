@@ -48,7 +48,13 @@ from app.storage import (
     StorageObjectNotFoundError,
     get_storage,
 )
-from app.worker.jobs import JobContext, JobError, RetryableJobError, enqueue_job, job_task
+from app.worker.jobs import (
+    JobContext,
+    JobError,
+    RetryableJobError,
+    enqueue_job,
+    job_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +135,17 @@ def _probe_stored_video(
         try:
             storage = get_storage(settings)
         except StorageConfigurationError:
-            logger.error("video_metadata_storage_unavailable", extra=_video_log(video.id))
+            logger.error(
+                "video_metadata_storage_unavailable", extra=_video_log(video.id)
+            )
             raise JobError(STORAGE_UNAVAILABLE_MESSAGE) from None
 
     try:
         with storage.local_path(key) as path:
             source = _check_permitted(path, storage)
-            return probe(source, timeout=settings.FFPROBE_TIMEOUT_SECONDS, settings=settings)
+            return probe(
+                source, timeout=settings.FFPROBE_TIMEOUT_SECONDS, settings=settings
+            )
     except JobError:
         raise
     except FFmpegNotFoundError:
@@ -261,7 +271,8 @@ def extract_video_metadata(
     except JobError as exc:
         _mark_failed(db, video_id, exc.public_message)
         logger.info(
-            "video_metadata_rejected", extra=_video_log(video_id, reason=exc.public_message)
+            "video_metadata_rejected",
+            extra=_video_log(video_id, reason=exc.public_message),
         )
         raise
     except SoftTimeLimitExceeded:

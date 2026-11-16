@@ -95,7 +95,9 @@ def make_transcript(video: Video, segments=(), **overrides) -> Transcript:
     return Transcript(**values)
 
 
-def make_segment(index: int, start: float, end: float, **overrides) -> TranscriptSegment:
+def make_segment(
+    index: int, start: float, end: float, **overrides
+) -> TranscriptSegment:
     values = {
         "index": index,
         "start_seconds": start,
@@ -154,7 +156,9 @@ def test_missing_word_timings_are_stored_as_sql_null(db, video):
     db.add(make_transcript(video, [make_segment(0, 0.0, 1.0, words=None)]))
     db.commit()
 
-    assert db.execute(text("SELECT words FROM transcript_segments")).scalar_one() is None
+    assert (
+        db.execute(text("SELECT words FROM transcript_segments")).scalar_one() is None
+    )
 
 
 def test_empty_transcript_without_segments(db, video):
@@ -189,7 +193,9 @@ def test_unicode_and_code_switched_text_round_trips(db, video):
                 index * 2.0,
                 index * 2.0 + 1.5,
                 text=segment_text,
-                words=[{"word": first_word, "start": index * 2.0, "end": index * 2.0 + 0.4}],
+                words=[
+                    {"word": first_word, "start": index * 2.0, "end": index * 2.0 + 0.4}
+                ],
             )
         )
     full_text = " ".join(segment_text for _language, segment_text in UNICODE_SEGMENTS)
@@ -240,7 +246,9 @@ def test_segment_requires_an_existing_transcript(db, video):
 
 
 def test_segment_indexes_are_unique_per_transcript(db, video, user):
-    db.add(make_transcript(video, [make_segment(0, 0.0, 1.0), make_segment(0, 1.0, 2.0)]))
+    db.add(
+        make_transcript(video, [make_segment(0, 0.0, 1.0), make_segment(0, 1.0, 2.0)])
+    )
 
     with pytest.raises(IntegrityError):
         db.commit()
@@ -296,7 +304,9 @@ def test_required_transcript_columns(db, video, column):
 
 
 def add_transcript_with_segments(db, video):
-    db.add(make_transcript(video, [make_segment(0, 0.0, 5.0), make_segment(1, 5.0, 9.0)]))
+    db.add(
+        make_transcript(video, [make_segment(0, 0.0, 5.0), make_segment(1, 5.0, 9.0)])
+    )
     db.commit()
 
 
@@ -413,7 +423,9 @@ def test_replace_transcript_stores_the_result_faithfully(db, video):
     assert loaded.provider == "fake"
     assert loaded.model == "fake-v1"
     assert loaded.full_text == "मैं kal आऊँगा"
-    assert [(s.index, s.start_seconds, s.end_seconds, s.text) for s in loaded.segments] == [
+    assert [
+        (s.index, s.start_seconds, s.end_seconds, s.text) for s in loaded.segments
+    ] == [
         (0, 0.0, 1.25, "मैं kal"),
         (1, 1.25, 3.333, "आऊँगा"),
     ]
@@ -427,7 +439,9 @@ def test_replace_transcript_stores_the_result_faithfully(db, video):
 def test_replace_transcript_keeps_requested_and_reported_language_apart(db, video):
     # The user asked for Telugu; the provider reported Hindi. Neither is
     # relabeled to match the other.
-    replace_transcript(db, video.id, make_result(language="hi"), requested_language="te")
+    replace_transcript(
+        db, video.id, make_result(language="hi"), requested_language="te"
+    )
     db.commit()
     db.expire_all()
 
@@ -475,7 +489,9 @@ def test_replace_transcript_with_zero_segments(db, video):
 def test_fake_provider_output_can_be_stored(db, video, tmp_path):
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"\x00")
-    provider = FakeTranscriptionProvider(duration_probe=lambda _path: video.duration_seconds)
+    provider = FakeTranscriptionProvider(
+        duration_probe=lambda _path: video.duration_seconds
+    )
 
     result = provider.transcribe(audio)
     replace_transcript(db, video.id, result)

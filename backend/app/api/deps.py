@@ -101,6 +101,7 @@ def get_optional_email_sender(
         logger.warning("email_not_configured", extra={"reason": str(exc)})
         return None
 
+
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
 # Sent on every API path; the cookie is never readable by scripts.
 ACCESS_TOKEN_COOKIE_PATH = "/"

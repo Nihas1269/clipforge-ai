@@ -5,6 +5,7 @@ Revises: 0001
 Create Date: 2026-11-16
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -58,9 +59,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.CheckConstraint(
-            "size_bytes >= 0", name="ck_videos_size_bytes_non_negative"
-        ),
+        sa.CheckConstraint("size_bytes >= 0", name="ck_videos_size_bytes_non_negative"),
     )
     op.create_index("ix_videos_user_id", "videos", ["user_id"], unique=False)
 

@@ -237,7 +237,9 @@ def test_valid_mp4_upload_is_stored_and_returns_201(client, db, token, storage_d
     assert str(video.id) == body["id"]
     assert str(video.user_id) == body["user_id"]
     assert video.status is VideoStatus.UPLOADED
-    assert video.storage_key == video_source_key(str(video.user_id), str(video.id), ".mp4")
+    assert video.storage_key == video_source_key(
+        str(video.user_id), str(video.id), ".mp4"
+    )
     storage = LocalStorage(storage_dir)
     assert storage.exists(video.storage_key)
     with storage.open(video.storage_key) as stored:
@@ -248,9 +250,21 @@ def test_valid_mp4_upload_is_stored_and_returns_201(client, db, token, storage_d
 @pytest.mark.parametrize(
     ("filename", "content", "content_type", "stored_type", "ext"),
     [
-        ("clip.mov", MOV_HEADER + b"\x00" * 100, "video/quicktime", "video/quicktime", ".mov"),
+        (
+            "clip.mov",
+            MOV_HEADER + b"\x00" * 100,
+            "video/quicktime",
+            "video/quicktime",
+            ".mov",
+        ),
         ("clip.webm", EBML_HEADER + b"\x00" * 100, "video/webm", "video/webm", ".webm"),
-        ("clip.mkv", EBML_HEADER + b"\x00" * 100, "video/x-matroska", "video/x-matroska", ".mkv"),
+        (
+            "clip.mkv",
+            EBML_HEADER + b"\x00" * 100,
+            "video/x-matroska",
+            "video/x-matroska",
+            ".mkv",
+        ),
         ("CLIP.MP4", MP4_BYTES, "Video/MP4; codecs=avc1", "video/mp4", ".mp4"),
         ("clip.mov", MP4_BYTES, "video/mp4", "video/quicktime", ".mov"),
     ],
@@ -258,7 +272,9 @@ def test_valid_mp4_upload_is_stored_and_returns_201(client, db, token, storage_d
 def test_supported_formats_are_accepted(
     client, db, token, storage_dir, filename, content, content_type, stored_type, ext
 ):
-    response = _upload(client, token, filename=filename, content=content, content_type=content_type)
+    response = _upload(
+        client, token, filename=filename, content=content, content_type=content_type
+    )
 
     assert response.status_code == 201
     assert response.json()["content_type"] == stored_type
@@ -299,7 +315,11 @@ def test_upload_queues_metadata_extraction(client, db, token, published_jobs):
     assert job.idempotency_key == body["id"]
     assert job.request_id == response.headers["x-request-id"]
     assert published_jobs == [
-        {"task": EXTRACT_METADATA_TASK_NAME, "args": [str(job.id)], "task_id": job.celery_task_id}
+        {
+            "task": EXTRACT_METADATA_TASK_NAME,
+            "args": [str(job.id)],
+            "task_id": job.celery_task_id,
+        }
     ]
 
 
@@ -417,7 +437,9 @@ def test_upload_with_invalid_token_returns_401(client, db, storage_dir):
 
 def test_cookie_authenticated_upload_requires_trusted_origin(client, db, storage_dir):
     _register(client)
-    login = client.post(LOGIN_URL, json={"email": "alice@example.com", "password": PASSWORD})
+    login = client.post(
+        LOGIN_URL, json={"email": "alice@example.com", "password": PASSWORD}
+    )
     assert login.status_code == 200
 
     evil = _upload(client, headers={"Origin": EVIL_ORIGIN})
@@ -446,7 +468,9 @@ def test_disallowed_extension_is_rejected(client, db, token, storage_dir, filena
 @pytest.mark.parametrize(
     "content_type", ["application/octet-stream", "text/plain", "video/avi", "image/png"]
 )
-def test_disallowed_content_type_is_rejected(client, db, token, storage_dir, content_type):
+def test_disallowed_content_type_is_rejected(
+    client, db, token, storage_dir, content_type
+):
     response = _upload(client, token, content_type=content_type)
 
     assert response.status_code == 415
@@ -473,7 +497,9 @@ def test_disallowed_content_type_is_rejected(client, db, token, storage_dir, con
 def test_mismatched_signature_or_type_is_rejected(
     client, db, token, storage_dir, filename, content, content_type
 ):
-    response = _upload(client, token, filename=filename, content=content, content_type=content_type)
+    response = _upload(
+        client, token, filename=filename, content=content, content_type=content_type
+    )
 
     assert response.status_code == 415
     assert response.json()["error"]["code"] == "file_type_mismatch"
@@ -481,12 +507,22 @@ def test_mismatched_signature_or_type_is_rejected(
 
 
 def test_allowlists_are_configurable(make_client, db, storage_dir):
-    client = make_client(ALLOWED_VIDEO_EXTENSIONS="MP4", ALLOWED_VIDEO_CONTENT_TYPES="video/mp4")
+    client = make_client(
+        ALLOWED_VIDEO_EXTENSIONS="MP4", ALLOWED_VIDEO_CONTENT_TYPES="video/mp4"
+    )
     _register(client)
     token = _token(client)
 
-    webm = _upload(client, token, filename="clip.webm", content=EBML_HEADER, content_type="video/webm")
-    mov = _upload(client, token, filename="clip.mov", content=MOV_HEADER, content_type="video/mp4")
+    webm = _upload(
+        client,
+        token,
+        filename="clip.webm",
+        content=EBML_HEADER,
+        content_type="video/webm",
+    )
+    mov = _upload(
+        client, token, filename="clip.mov", content=MOV_HEADER, content_type="video/mp4"
+    )
     mp4 = _upload(client, token)
 
     assert webm.status_code == 415
@@ -515,7 +551,9 @@ def test_missing_file_field_is_rejected(client, db, token, storage_dir):
 
 def test_non_multipart_request_is_rejected(client, db, token, storage_dir):
     response = client.post(
-        VIDEOS_URL, content=MP4_BYTES, headers={**_bearer(token), "Content-Type": "video/mp4"}
+        VIDEOS_URL,
+        content=MP4_BYTES,
+        headers={**_bearer(token), "Content-Type": "video/mp4"},
     )
 
     assert response.status_code == 415
@@ -565,7 +603,9 @@ def test_extra_form_fields_are_rejected(client, db, token, storage_dir):
 # Size limit
 
 
-def test_file_over_size_limit_is_rejected_and_nothing_remains(client, db, token, storage_dir):
+def test_file_over_size_limit_is_rejected_and_nothing_remains(
+    client, db, token, storage_dir
+):
     content = MP4_HEADER + b"\x00" * (MIB + 1 - len(MP4_HEADER))
 
     response = _upload(client, token, content=content)
@@ -649,7 +689,9 @@ def _run_streamed_upload(application, token, extra_headers=(), disconnect_after=
     return start["status"], state["pulled"]
 
 
-def test_oversized_stream_is_aborted_before_it_is_fully_read(client, db, token, storage_dir):
+def test_oversized_stream_is_aborted_before_it_is_fully_read(
+    client, db, token, storage_dir
+):
     status_code, pulled = _run_streamed_upload(client.app, token)
 
     assert status_code == 413
@@ -685,7 +727,9 @@ def test_interrupted_upload_stores_nothing_and_closes_temp_files(
             super().__init__(*args, **kwargs)
             spooled.append(self)
 
-    monkeypatch.setattr(starlette.formparsers, "SpooledTemporaryFile", RecordingSpooledFile)
+    monkeypatch.setattr(
+        starlette.formparsers, "SpooledTemporaryFile", RecordingSpooledFile
+    )
 
     with caplog.at_level(logging.INFO):
         status_code, _ = _run_streamed_upload(client.app, token, disconnect_after=3)
@@ -712,7 +756,9 @@ def test_interrupted_upload_stores_nothing_and_closes_temp_files(
         ("  spaced name.mp4 ", "spaced name.mp4"),
     ],
 )
-def test_path_like_filename_is_sanitized(client, db, token, storage_dir, filename, expected):
+def test_path_like_filename_is_sanitized(
+    client, db, token, storage_dir, filename, expected
+):
     response = _upload(client, token, filename=filename)
 
     assert response.status_code == 201
@@ -720,7 +766,9 @@ def test_path_like_filename_is_sanitized(client, db, token, storage_dir, filenam
     video = db.scalars(select(Video)).one()
     assert video.original_filename == expected
     # The storage key is generated from ids, never from the file name.
-    assert video.storage_key == video_source_key(str(video.user_id), str(video.id), ".mp4")
+    assert video.storage_key == video_source_key(
+        str(video.user_id), str(video.id), ".mp4"
+    )
     assert _stored_files(storage_dir) == [storage_dir / video.storage_key]
     assert not (storage_dir.parent / "etc").exists()
 
@@ -737,7 +785,9 @@ def test_long_filename_is_truncated_keeping_extension(client, token):
 # Failure cleanup
 
 
-def test_database_failure_removes_the_stored_file(client, session_factory, db, token, storage_dir):
+def test_database_failure_removes_the_stored_file(
+    client, session_factory, db, token, storage_dir
+):
     def failing_db():
         session = session_factory()
 
@@ -810,7 +860,9 @@ class _FailAfterWriteStorage(LocalStorage):
 
 
 def test_storage_failure_removes_partial_object(client, db, token, storage_dir):
-    client.app.dependency_overrides[get_video_storage] = lambda: _FailAfterWriteStorage(storage_dir)
+    client.app.dependency_overrides[get_video_storage] = lambda: _FailAfterWriteStorage(
+        storage_dir
+    )
 
     response = _upload(client, token)
 
@@ -841,11 +893,18 @@ def test_upload_outcome_is_logged_without_filename_or_contents(client, token, ca
         accepted = _upload(client, token, filename="secret-holiday-plans.mp4")
         rejected = _upload(client, token, filename="private-diary.avi")
         mismatched = _upload(
-            client, token, filename="clip.webm", content=MP4_BYTES, content_type="video/webm"
+            client,
+            token,
+            filename="clip.webm",
+            content=MP4_BYTES,
+            content_type="video/webm",
         )
         # An unrecognized extension can hold part of a private file name.
         odd = _upload(
-            client, token, filename="clip.my-secret-trip", content_type="text/x-secret-memo"
+            client,
+            token,
+            filename="clip.my-secret-trip",
+            content_type="text/x-secret-memo",
         )
 
     assert accepted.status_code == 201
@@ -859,7 +918,9 @@ def test_upload_outcome_is_logged_without_filename_or_contents(client, token, ca
     assert record.video_id == accepted.json()["id"]
     assert record.size_bytes == len(MP4_BYTES)
     assert record.content_type == "video/mp4"
-    rejections = [r for r in caplog.records if r.getMessage() == "video_upload_rejected"]
+    rejections = [
+        r for r in caplog.records if r.getMessage() == "video_upload_rejected"
+    ]
     assert [r.reason for r in rejections] == [
         "unsupported_file_type",
         "file_type_mismatch",

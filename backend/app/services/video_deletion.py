@@ -39,7 +39,9 @@ def delete_video(
         # Scoped to the owner again, so a stale or foreign id never deletes
         # anything.
         storage_key = db.scalar(
-            select(Video.storage_key).where(Video.id == video_id, Video.user_id == user_id)
+            select(Video.storage_key).where(
+                Video.id == video_id, Video.user_id == user_id
+            )
         )
         if storage_key is None:
             raise VideoNotFoundError(str(video_id))

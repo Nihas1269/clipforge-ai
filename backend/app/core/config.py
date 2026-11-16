@@ -176,7 +176,9 @@ class Settings(BaseSettings):
     def _blank_binary_path_is_default(cls, value: Any, info: ValidationInfo) -> Any:
         if value is None or (isinstance(value, str) and not value.strip()):
             return (
-                DEFAULT_FFMPEG_PATH if info.field_name == "FFMPEG_PATH" else DEFAULT_FFPROBE_PATH
+                DEFAULT_FFMPEG_PATH
+                if info.field_name == "FFMPEG_PATH"
+                else DEFAULT_FFPROBE_PATH
             )
         if isinstance(value, str):
             return value.strip()

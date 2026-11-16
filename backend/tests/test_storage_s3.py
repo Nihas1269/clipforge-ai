@@ -401,7 +401,9 @@ def test_size_returns_content_length(stubbed):
 
 def test_size_of_missing_object_raises_not_found(stubbed):
     storage, stubber = stubbed
-    stubber.add_client_error("head_object", service_error_code="404", http_status_code=404)
+    stubber.add_client_error(
+        "head_object", service_error_code="404", http_status_code=404
+    )
 
     with pytest.raises(StorageObjectNotFoundError):
         storage.size(KEY)
@@ -409,7 +411,9 @@ def test_size_of_missing_object_raises_not_found(stubbed):
 
 def test_size_propagates_permission_error(stubbed):
     storage, stubber = stubbed
-    stubber.add_client_error("head_object", service_error_code="403", http_status_code=403)
+    stubber.add_client_error(
+        "head_object", service_error_code="403", http_status_code=403
+    )
 
     with pytest.raises(ClientError):
         storage.size(KEY)
@@ -420,7 +424,10 @@ def test_open_returns_object_body(stubbed):
     data = b"remote frames"
     stubber.add_response(
         "get_object",
-        {"Body": StreamingBody(io.BytesIO(data), len(data)), "ContentLength": len(data)},
+        {
+            "Body": StreamingBody(io.BytesIO(data), len(data)),
+            "ContentLength": len(data),
+        },
         {"Bucket": BUCKET, "Key": KEY},
     )
 

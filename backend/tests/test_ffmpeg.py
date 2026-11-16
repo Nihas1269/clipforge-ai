@@ -89,7 +89,9 @@ def test_extract_audio_writes_mono_wav(test_video, tmp_path):
         assert wav.getnchannels() == 1
         assert wav.getframerate() == 16000
         assert wav.getsampwidth() == 2
-        assert wav.getnframes() / wav.getframerate() == pytest.approx(TEST_DURATION, abs=0.25)
+        assert wav.getnframes() / wav.getframerate() == pytest.approx(
+            TEST_DURATION, abs=0.25
+        )
 
 
 @requires_ffmpeg
@@ -101,7 +103,9 @@ def test_extract_audio_custom_sample_rate(test_video, tmp_path):
 
 
 @requires_ffmpeg
-def test_extract_audio_without_audio_track_fails_and_leaves_no_file(media_dir, tmp_path):
+def test_extract_audio_without_audio_track_fails_and_leaves_no_file(
+    media_dir, tmp_path
+):
     silent = make_test_video(media_dir / "video-only.mp4", with_audio=False)
     dst = tmp_path / "audio.wav"
 
@@ -191,7 +195,9 @@ def test_probe_of_missing_file_raises_media_error(tmp_path):
         probe(tmp_path / "missing.mp4")
 
 
-@pytest.mark.parametrize("args", ["-i input.mp4 out.wav", b"-version", [1, 2], ["a\x00b"]])
+@pytest.mark.parametrize(
+    "args", ["-i input.mp4 out.wav", b"-version", [1, 2], ["a\x00b"]]
+)
 def test_run_ffmpeg_requires_an_argument_list(args):
     with pytest.raises((TypeError, ValueError)):
         run_ffmpeg(args)
@@ -231,7 +237,9 @@ class FakeRun:
 
 @pytest.fixture
 def fake_tools(monkeypatch):
-    monkeypatch.setattr(ffmpeg, "_resolve_binary", lambda configured, setting: f"/bin/{configured}")
+    monkeypatch.setattr(
+        ffmpeg, "_resolve_binary", lambda configured, setting: f"/bin/{configured}"
+    )
 
 
 @pytest.fixture
@@ -303,11 +311,16 @@ def test_probe_default_timeout_comes_from_settings(monkeypatch, fake_tools, inpu
     assert fake.calls[0][1]["timeout"] == 7
 
 
-def test_run_ffmpeg_prepends_safe_options_and_uses_configured_timeout(monkeypatch, fake_tools):
+def test_run_ffmpeg_prepends_safe_options_and_uses_configured_timeout(
+    monkeypatch, fake_tools
+):
     fake = FakeRun()
     monkeypatch.setattr(subprocess, "run", fake)
 
-    run_ffmpeg(["-i", "in.mp4", "out.wav"], settings=Settings(_env_file=None, FFMPEG_TIMEOUT_SECONDS=5))
+    run_ffmpeg(
+        ["-i", "in.mp4", "out.wav"],
+        settings=Settings(_env_file=None, FFMPEG_TIMEOUT_SECONDS=5),
+    )
 
     command, kwargs = fake.calls[0]
     assert command == [
@@ -324,7 +337,9 @@ def test_run_ffmpeg_prepends_safe_options_and_uses_configured_timeout(monkeypatc
     assert kwargs["timeout"] == 5
 
 
-def test_nonzero_exit_raises_media_error_with_truncated_stderr(monkeypatch, fake_tools, input_file):
+def test_nonzero_exit_raises_media_error_with_truncated_stderr(
+    monkeypatch, fake_tools, input_file
+):
     stderr = ("noise\n" * 2000 + "moov atom not found\x1b[0m").encode()
     monkeypatch.setattr(subprocess, "run", FakeRun(stderr=stderr, returncode=1))
 
@@ -339,7 +354,9 @@ def test_nonzero_exit_raises_media_error_with_truncated_stderr(monkeypatch, fake
 
 
 def test_timeout_raises_media_timeout_error(monkeypatch, fake_tools, input_file):
-    fake = FakeRun(stderr=b"still working", raises=subprocess.TimeoutExpired(["ffprobe"], 3))
+    fake = FakeRun(
+        stderr=b"still working", raises=subprocess.TimeoutExpired(["ffprobe"], 3)
+    )
     monkeypatch.setattr(subprocess, "run", fake)
 
     with pytest.raises(MediaTimeoutError) as excinfo:
@@ -349,7 +366,9 @@ def test_timeout_raises_media_timeout_error(monkeypatch, fake_tools, input_file)
     assert excinfo.value.stderr == "still working"
 
 
-def test_binary_vanishing_before_start_raises_not_found(monkeypatch, fake_tools, input_file):
+def test_binary_vanishing_before_start_raises_not_found(
+    monkeypatch, fake_tools, input_file
+):
     monkeypatch.setattr(subprocess, "run", FakeRun(raises=FileNotFoundError(2, "gone")))
 
     with pytest.raises(FFmpegNotFoundError):
