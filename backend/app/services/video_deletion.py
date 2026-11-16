@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.processing_job import ProcessingJob
 from app.models.storage_deletion import PendingStorageDeletion
+from app.models.transcript import Transcript, TranscriptSegment
 from app.models.video import Video
 from app.services.storage_cleanup import delete_pending_object
 from app.storage import StorageBackend
@@ -22,10 +23,10 @@ class VideoNotFoundError(LookupError):
 def delete_video(
     db: Session, storage: StorageBackend, video_id: uuid.UUID, user_id: uuid.UUID
 ) -> bool:
-    """Delete the user's video, its processing jobs and its stored file.
+    """Delete the user's video, its processing jobs, transcript and stored file.
 
-    In one transaction the video row (only if it belongs to `user_id`) and its
-    jobs are deleted and a PendingStorageDeletion for the file is recorded.
+    In one transaction the video row (only if it belongs to `user_id`), its
+    jobs and its transcript are deleted and a PendingStorageDeletion for the file is recorded.
     Only after that commit is the file deleted; if that fails the pending
     deletion stays and is retried later, so the database never keeps a row for
     a deleted video and the file is never forgotten.
@@ -42,11 +43,23 @@ def delete_video(
         )
         if storage_key is None:
             raise VideoNotFoundError(str(video_id))
-        # The foreign key also cascades, but deleting the jobs explicitly
+        # The foreign keys also cascade, but deleting the jobs and the
+        # transcript explicitly
         # keeps databases without enforced foreign keys consistent.
         db.execute(
             delete(ProcessingJob)
             .where(ProcessingJob.video_id == video_id)
+            .execution_options(synchronize_session=False)
+        )
+        transcript_ids = select(Transcript.id).where(Transcript.video_id == video_id)
+        db.execute(
+            delete(TranscriptSegment)
+            .where(TranscriptSegment.transcript_id.in_(transcript_ids))
+            .execution_options(synchronize_session=False)
+        )
+        db.execute(
+            delete(Transcript)
+            .where(Transcript.video_id == video_id)
             .execution_options(synchronize_session=False)
         )
         result = db.execute(
