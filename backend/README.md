@@ -393,6 +393,13 @@ credentials are checked before any of the request body is read.
   recognized video type is logged as `other`. File names and contents are
   never logged.
 
+`GET /api/v1/videos/upload-limits` (authenticated) returns the limits this
+endpoint enforces, so clients can check a file before sending it without
+keeping their own copy: `max_upload_size_bytes` (`MAX_UPLOAD_SIZE_MB` in
+bytes) and the entries of `ALLOWED_VIDEO_EXTENSIONS` and
+`ALLOWED_VIDEO_CONTENT_TYPES` that the upload actually accepts (those with a
+known file signature). The upload itself still validates everything.
+
 Limitations: no resumable or chunked uploads; the whole file is first
 spooled to a temporary file on the API server's disk and then copied to
 storage, so the server needs free temporary space of up to
@@ -570,6 +577,7 @@ root and is not versioned.
 | POST   | `/api/v1/auth/verify-email/confirm` | `{token}`                | `200` `{message}`; `400` `invalid_token`; `422`; `429`                   |
 | POST   | `/api/v1/auth/password-reset/request` | `{email}`              | `202` `{message}` (always the same); `422`; `429`; `503` email not configured |
 | POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
+| GET    | `/api/v1/videos/upload-limits` | —                             | `200` `{max_upload_size_bytes, allowed_extensions, allowed_content_types}`; `401` |
 | POST   | `/api/v1/videos`        | multipart, one file part `file`      | `201` `VideoRead`; `400` malformed multipart; `401`; `413` too large; `415` type not allowed or mismatched; `422` missing or empty file; `500`/`503` storage or database failure |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 

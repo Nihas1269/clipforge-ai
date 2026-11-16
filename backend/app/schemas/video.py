@@ -29,6 +29,14 @@ class VideoRead(BaseModel):
     updated_at: datetime
 
 
+class UploadLimits(BaseModel):
+    """The upload limits enforced by `POST /videos`, for client-side checks."""
+
+    max_upload_size_bytes: int = Field(gt=0)
+    allowed_extensions: list[str]
+    allowed_content_types: list[str]
+
+
 class VideoList(BaseModel):
     """A list of videos with the total number available."""
 

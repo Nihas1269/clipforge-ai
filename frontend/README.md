@@ -34,6 +34,7 @@ the updated `package-lock.json`.
 | Variable                   | Default for local development | Purpose                       |
 | -------------------------- | ----------------------------- | ----------------------------- |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000`       | Base URL of the backend API. |
+| `NEXT_PUBLIC_MAX_UPLOAD_SIZE_MB` | `500`                   | Fallback upload size limit (MiB), used only when the backend's limits cannot be loaded. Keep it equal to the backend's `MAX_UPLOAD_SIZE_MB`. |
 
 [`.env.example`](.env.example) lists every variable with its local default.
 To set them locally, copy it to `frontend/.env.local` (ignored by Git):
@@ -106,15 +107,18 @@ current suite", so the setup file does not register hooks itself.
 ```text
 src/
   app/          Routes (App Router): root layout, landing page, /login,
-                /register, the protected /dashboard placeholder and
-                /settings/profile, and the shared loading, error, and
+                /register, the protected /dashboard placeholder,
+                /settings/profile, /videos/new and the /videos/[id]
+                placeholder, and the shared loading, error, and
                 not-found states
   components/   Reusable UI components (Button, Container, SiteHeader,
                 StatusMessage, TextField), the auth forms in auth/, the
                 session provider, protected layout and user menu in
-                session/, and the profile forms in profile/
+                session/, the profile forms in profile/, and the upload
+                form in videos/
   lib/          Shared constants, the API client (lib/api), and form
                 validation (lib/validation)
+  test-utils/   Test helpers (a fake XMLHttpRequest)
 ```
 
 Tests sit next to the code they cover as `*.test.tsx`.
@@ -184,11 +188,52 @@ Tests sit next to the code they cover as `*.test.tsx`.
 
 Requests are credentialed (`credentials: "include"`), so the frontend origin
 must be listed in the backend's `CORS_ORIGINS` (see "Connecting to the
-backend"); otherwise logout and profile changes get `403 csrf_failed`.
+backend"); otherwise logout, profile changes and uploads get `403 csrf_failed`.
 
 Limitations: the session check runs in the browser, so protected pages are
 not checked during server rendering (the server only sends the loading
-state; all data comes from the authenticated API). `/dashboard` and
-`/settings` each have their own `layout.tsx` instead of a shared `(app)`
-route group, so moving between them re-checks the session. The login and
-register pages do not redirect users who are already logged in.
+state; all data comes from the authenticated API). `/dashboard`,
+`/settings` and `/videos` each have their own `layout.tsx` instead of a
+shared `(app)` route group, so moving between them re-checks the session. The
+login and register pages do not redirect users who are already logged in.
+
+## Video upload
+
+- `/videos/new` (protected by `src/app/videos/layout.tsx`) uploads one
+  long-form video. Files can be chosen with the labelled **Video file** input
+  or dropped on the drop zone, which is a native button (focusable, opened
+  with Enter or Space) that opens the file picker. The dashboard links to it.
+- **Limits.** The page loads `GET /api/v1/videos/upload-limits` (size in bytes
+  and allowed extensions) so the browser uses the backend's own limits. Only
+  if that request fails does it fall back to `NEXT_PUBLIC_MAX_UPLOAD_SIZE_MB`
+  (default 500) and `.mp4`, `.mov`, `.webm`, `.mkv`. Unsupported extensions,
+  empty files and files over the limit are rejected without a request. These
+  checks are only for the user's convenience; the backend validates every
+  upload (type, file signature, size) and its errors are shown as returned.
+- `src/lib/api/videos.ts` — `uploadVideo(file, {onProgress, onSent, signal})`
+  posts `multipart/form-data` with the single field `file` to
+  `POST /api/v1/videos` through `XMLHttpRequest` with `withCredentials`, so
+  upload progress is available. If the browser reports no type for a file,
+  the type is set from the extension (for example `.mkv` on some systems).
+  It rejects with an `ApiError`: the backend error, `network_error`,
+  `upload_cancelled`, `invalid_response` for a malformed success response,
+  or `timeout` when no progress is reported for 60 s while sending, or no
+  response arrives within 5 minutes after the file was sent.
+  `getUploadLimits()` reads the limits.
+- **Progress and announcements.** A `role="progressbar"` with
+  `aria-valuenow`/`aria-valuetext` shows the percentage sent; state changes
+  ("Uploading …", "Upload cancelled.", "Upload complete …") are announced
+  politely and errors through an `aria-live="assertive"` alert. After a
+  failure or cancel, focus returns to the drop zone.
+- **Cancel.** **Cancel upload** (and leaving the page) aborts the request.
+  The backend sees the disconnect, discards the partial body (`400
+  upload_interrupted`) and stores nothing. Once the whole file has been sent
+  the button is disabled, because the backend may already be storing it.
+- On success the page navigates to `/videos/{id}`, a placeholder until the
+  video detail page is built (CF-030).
+
+Limitations: an abort that races the very end of the request body can still
+let the backend store the video, and there is no endpoint yet to delete it.
+Uploads are not resumable; a failed upload must be started again. Progress
+measures bytes sent to the server, not the time the server then needs to
+validate and store the file.
