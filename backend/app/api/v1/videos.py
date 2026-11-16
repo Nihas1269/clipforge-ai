@@ -10,8 +10,9 @@ then parsed as it streams in: the file part is spooled to a temporary file
 (at most 1 MiB is held in memory) and reading stops as soon as the body
 exceeds MAX_UPLOAD_SIZE_MB plus a small allowance for the multipart framing.
 Once the extension, declared content type and file signature have been
-validated, the file is streamed to storage under a generated key and a
-`Video` row is created with status `uploaded`. Processing is not started here.
+validated, the file is streamed to storage under a generated key, a `Video`
+row is created with status `uploaded`, and a metadata extraction job is
+queued (see app.worker.metadata).
 
 Validation checks the file format only; it is not malware scanning. The
 client's file name is sanitized and stored for display only; it is never used
@@ -38,6 +39,7 @@ from starlette.requests import ClientDisconnect
 from app.api.deps import get_current_user, get_owned_video
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
+from app.core.request_id import get_request_id
 from app.database import get_db
 from app.models.user import User
 from app.models.video import Video, VideoStatus
@@ -64,6 +66,7 @@ from app.storage import (
     get_storage,
     video_source_key,
 )
+from app.worker.metadata import queue_metadata_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +409,25 @@ def _store_upload(
     return video
 
 
+def _start_processing(db: Session, video: Video, request_id: str | None) -> Video:
+    """Queue metadata extraction for the stored video and return its current row.
+
+    The upload has succeeded either way: if the job cannot be queued, the
+    video is marked failed with a message (see queue_metadata_extraction).
+    """
+    queue_metadata_extraction(db, video, request_id=request_id)
+    try:
+        # A job that runs eagerly (tests) or fails to queue changes the row.
+        db.refresh(video)
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "video_upload_refresh_failed",
+            extra={"video_id": str(video.id), "error_type": type(exc).__name__},
+        )
+    return video
+
+
 @router.get("/upload-limits", response_model=UploadLimits)
 def get_upload_limits(
     _user: User = Depends(get_current_user),
@@ -459,6 +481,7 @@ async def upload_video(
         )
     finally:
         await form.close()
+    video = await run_in_threadpool(_start_processing, db, video, get_request_id())
     return VideoRead.model_validate(video)
 
 

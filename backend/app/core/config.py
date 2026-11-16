@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -28,6 +28,9 @@ DEFAULT_ALLOWED_VIDEO_CONTENT_TYPES = (
     "video/webm",
     "video/x-matroska",
 )
+
+DEFAULT_FFMPEG_PATH = "ffmpeg"
+DEFAULT_FFPROBE_PATH = "ffprobe"
 
 # Development-only default for SECRET_KEY. It is public, so it is rejected in
 # production.
@@ -152,6 +155,33 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: SecretStr | None = None
     SMTP_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+    # FFmpeg/ffprobe binaries: a command name looked up on PATH, or a full
+    # path. Blank values fall back to the defaults.
+    FFMPEG_PATH: str = DEFAULT_FFMPEG_PATH
+    FFPROBE_PATH: str = DEFAULT_FFPROBE_PATH
+    # Wall-clock limits for a single ffmpeg / ffprobe run; the process is
+    # killed when they are exceeded.
+    FFMPEG_TIMEOUT_SECONDS: float = Field(default=1800.0, gt=0, le=3600)
+    FFPROBE_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
+    # Resource limits for FFmpeg processes (POSIX only): virtual address space
+    # (not resident memory, so leave headroom for thread stacks and malloc
+    # arenas on many-core machines) and the largest file a process may write.
+    FFMPEG_MAX_MEMORY_MB: int = Field(default=8192, gt=0)
+    FFMPEG_MAX_OUTPUT_FILE_MB: int = Field(default=2048, gt=0)
+    # Longer videos are marked failed by metadata extraction.
+    MAX_VIDEO_DURATION_SECONDS: int = Field(default=7200, gt=0)
+
+    @field_validator("FFMPEG_PATH", "FFPROBE_PATH", mode="before")
+    @classmethod
+    def _blank_binary_path_is_default(cls, value: Any, info: ValidationInfo) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return (
+                DEFAULT_FFMPEG_PATH if info.field_name == "FFMPEG_PATH" else DEFAULT_FFPROBE_PATH
+            )
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
     # Speech-to-text provider. A plain string, not a Literal, so an unknown
     # name does not stop the app from starting; get_transcription_provider()
     # raises a clear error when transcription is first used. "fake" returns

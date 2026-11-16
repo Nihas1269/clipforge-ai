@@ -88,6 +88,12 @@ Copy-Item .env.example .env
 | `SMTP_SECURITY`               | `starttls`               | `starttls`, `ssl`, or `none` (refused in production).        |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | unset                | SMTP credentials (both or neither).                          |
 | `SMTP_TIMEOUT_SECONDS`        | `10`                     | SMTP connection/command timeout.                             |
+| `MAX_VIDEO_DURATION_SECONDS`  | `7200`                   | Longest accepted video; longer ones are marked `failed`.     |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe`    | FFmpeg binaries: a name on `PATH` or a full path.            |
+| `FFMPEG_TIMEOUT_SECONDS`      | `1800`                   | Wall-clock limit of one ffmpeg run (at most 3600).           |
+| `FFPROBE_TIMEOUT_SECONDS`     | `60`                     | Wall-clock limit of one ffprobe run (at most 600).           |
+| `FFMPEG_MAX_MEMORY_MB`        | `8192`                   | Virtual memory limit of FFmpeg processes (Linux/macOS only). |
+| `FFMPEG_MAX_OUTPUT_FILE_MB`   | `2048`                   | Largest file an FFmpeg process may write (Linux/macOS only). |
 | `TRANSCRIPTION_PROVIDER`      | `fake`                   | Speech-to-text provider (see Transcripts below); `fake` is refused in production. |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
@@ -448,8 +454,12 @@ credentials are checked before any of the request body is read.
   command.
 - **Storage**: the file is streamed to storage under
   `video_source_key(user_id, video_id, ext)` with a newly generated video id,
-  and a `Video` row is created with status `uploaded`; the response is
-  `201` with `VideoRead`. Processing is not started (CF-018 adds that).
+  and a `Video` row is created with status `uploaded`; then a metadata
+  extraction job is queued (see "Media metadata extraction") and the response
+  is `201` with `VideoRead` (normally still `uploaded`). If the job cannot be
+  queued (Redis down, `REDIS_URL` unset) the upload still succeeds, but the
+  video is returned as `failed` with "Processing could not be started. Try
+  again later."
 - **Cleanup**: if writing to storage or committing the row fails, the stored
   object is deleted and `500 upload_failed` is returned. Oversized or invalid
   uploads never reach storage, and an interrupted request ends with `400
@@ -473,8 +483,8 @@ Limitations: no resumable or chunked uploads; the whole file is first
 spooled to a temporary file on the API server's disk and then copied to
 storage, so the server needs free temporary space of up to
 `MAX_UPLOAD_SIZE_MB` per concurrent upload. Only the first bytes are checked,
-so a file with a valid header but corrupt contents is accepted (probing in
-CF-018 will catch it). Older QuickTime files that do not start with an
+so a file with a valid header but corrupt contents is accepted; the metadata
+job then marks it `failed`. Older QuickTime files that do not start with an
 `ftyp` box are rejected. If deleting a stored
 object fails during cleanup, the failure is logged
 (`video_upload_cleanup_failed`) and the object is left behind.
@@ -637,8 +647,84 @@ the worker log, so keep secrets out of exception messages and protect worker
 logs. A queued job whose message is lost inside Redis (for example after
 Redis data loss) stays queued; there is no automatic re-publishing. Stale
 running jobs are failed, not retried. A running task is not forcibly stopped
-on cancellation. No API endpoint queues or cancels jobs yet; processing
-features add them.
+on cancellation. Only the upload endpoint queues jobs so far (metadata
+extraction); no API endpoint cancels them yet.
+
+## Media metadata extraction
+
+FFmpeg and ffprobe must be installed on the machine running the Celery
+worker (the API itself never runs them). Install them from your package
+manager (`apt install ffmpeg`, `brew install ffmpeg`, or the Windows builds
+linked from <https://ffmpeg.org/download.html>) and, if they are not on
+`PATH`, set `FFMPEG_PATH` and `FFPROBE_PATH` to the binaries.
+
+`app/media/ffmpeg.py` wraps the tools (no Python FFmpeg library is used):
+
+- `probe(path) -> MediaInfo`: duration, width, height, fps, `has_video`,
+  `has_audio`, video and audio codec, from `ffprobe -print_format json`.
+  Values ffprobe does not report or reports as nonsense (zero, negative,
+  infinite, absurd frame rates) are `None`; cover art is not counted as a
+  video stream.
+- `extract_audio(src, dst, sample_rate=16000)`: writes mono 16-bit PCM WAV;
+  a partial file is removed on failure.
+- `run_ffmpeg(args)`: runs `ffmpeg -nostdin -hide_banner -loglevel error
+  <args>`.
+
+Processes are started with an argument list and `shell=False` (a string
+command line is rejected), stdin closed, and a timeout
+(`FFMPEG_TIMEOUT_SECONDS` / `FFPROBE_TIMEOUT_SECONDS`) after which they are
+killed. stdout and stderr go to temporary files and only a bounded amount is
+read back (1 MiB of stdout, the last 8 KiB of stderr). On Linux/macOS the
+child also gets `RLIMIT_AS` (`FFMPEG_MAX_MEMORY_MB`), `RLIMIT_FSIZE`
+(`FFMPEG_MAX_OUTPUT_FILE_MB`) and no core dumps. Inputs are passed as
+absolute paths of existing regular files (so they can never be taken for an
+option) with `-protocol_whitelist file`, so a crafted file such as an HLS
+playlist cannot make FFmpeg open URLs. Failures raise `MediaError`, whose
+message includes the truncated stderr tail (at most 1000 characters, control
+characters removed); `MediaTimeoutError` and `FFmpegNotFoundError` (binary
+missing; the message names the setting to fix) are subclasses.
+
+After an upload, the endpoint queues the `metadata` job
+`app.worker.metadata.extract_metadata` (payload `{"video_id": ...}`,
+idempotency key = video id, 3 attempts, soft/hard time limit 900/960 s). It:
+
+1. moves the video to `processing` (from `uploaded`, `failed` or `ready`;
+   the row is locked with `SELECT ... FOR UPDATE`);
+2. checks that `storage_key` is the video's own key
+   (`users/<user_id>/videos/<video_id>/...`), gets a local path through
+   `storage.local_path(key)` and checks that the resolved path is a regular
+   file inside the storage root (local backend) or the temporary directory
+   (remote backends, which download a copy);
+3. probes it and saves `duration_seconds`, `width`, `height` and `fps`, then
+   moves the video to `ready`.
+
+The video is moved to `failed` with a message for the owner (the job fails
+with the same message) when the file is not a valid video, has no video
+stream, has no usable duration or dimensions, is longer than
+`MAX_VIDEO_DURATION_SECONDS` ("The video is too long (N seconds); the maximum
+is M seconds."), is missing, is stored somewhere unexpected, when ffprobe is
+not installed or times out, and on any unexpected error or time limit. Tool
+output, paths and keys are never stored in these messages or logged. Only an
+I/O or storage error while reading the file is retried; the video stays
+`processing` while a retry is queued and fails on the last attempt. A failed
+video's metadata fields are cleared. Running the job again for a video
+re-probes the file and overwrites the fields, so retries and reprocessing
+never duplicate anything. Log events: `video_metadata_started`,
+`video_metadata_extracted` (duration, dimensions, fps, codecs),
+`video_metadata_rejected` (reason), `video_metadata_queue_failed` and others,
+all with `video_id` only.
+
+Limitations: `has_audio` and the codecs are logged but not stored (the
+`videos` table has no columns for them yet). The resource limits are not
+applied on Windows, where only the timeout and the bounded output capture
+protect the worker. `RLIMIT_AS` limits virtual memory, so a very low
+`FFMPEG_MAX_MEMORY_MB` can make FFmpeg fail on machines with many cores.
+There is no endpoint yet to retry processing of a failed video. When a
+worker is killed during a metadata job (hard time limit, crash),
+`fail_stale_jobs` fails the job and moves the video from `processing` to
+`failed` ("Processing was interrupted. Try again later."), but only after the
+stale timeout (65 minutes). A video whose queued message was lost (for
+example after Redis data loss) stays `uploaded`.
 
 ## Running the server
 
@@ -926,5 +1012,8 @@ the migration tests in `tests/test_migrations.py`) and do not require
 PostgreSQL or `DATABASE_URL` to be set. Background job tests run Celery
 eagerly and mock broker publishing, so they need no Redis. The S3 storage tests use
 `botocore.stub.Stubber` and mocked clients, so they need no network access or
-S3 credentials. They ignore `backend/.env` and clear the
+S3 credentials. The FFmpeg tests generate a 2-second test video at runtime
+with `ffmpeg -f lavfi` (no media files are committed); tests that need the
+real `ffmpeg`/`ffprobe` binaries are skipped, with the reason shown by
+`pytest -rs`, when they are not installed. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).

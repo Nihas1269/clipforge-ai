@@ -42,6 +42,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import app.models  # noqa: F401  (registers every model, so relationships resolve)
 from app import database
 from app.core.request_id import get_request_id, is_valid_request_id
 from app.models.processing_job import (
@@ -51,6 +52,7 @@ from app.models.processing_job import (
     JobType,
     ProcessingJob,
 )
+from app.models.video import Video, VideoStatus, transition_status
 from app.worker.celery_app import FAIL_STALE_JOBS_TASK_NAME, celery_app
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,7 @@ STALE_JOB_MESSAGE = (
     "The job was interrupted before it finished (for example by a worker "
     "restart)."
 )
+STALE_VIDEO_MESSAGE = "Processing was interrupted. Try again later."
 
 # user:password@ in URLs, so credentials never reach error_message.
 _URL_CREDENTIALS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@")
@@ -666,16 +669,17 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
     if now is None:
         now = _utcnow()
     cutoff = now - STALE_RUNNING_AFTER
-    stale_ids = list(
-        db.scalars(
-            select(ProcessingJob.id).where(
+    stale = list(
+        db.execute(
+            select(ProcessingJob.id, ProcessingJob.job_type, ProcessingJob.video_id).where(
                 ProcessingJob.status == JobStatus.RUNNING,
                 ProcessingJob.started_at < cutoff,
             )
         )
     )
     failed = 0
-    for job_id in stale_ids:
+    stale_video_ids = []
+    for job_id, job_type, video_id in stale:
         # Re-checked atomically in case the job finished meanwhile.
         result = db.execute(
             update(ProcessingJob)
@@ -695,8 +699,27 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
         if result.rowcount == 1:
             failed += 1
             logger.warning("job_marked_stale", extra={"job_id": str(job_id)})
+            if job_type == JobType.METADATA and video_id is not None:
+                stale_video_ids.append(video_id)
     db.commit()
+    for video_id in stale_video_ids:
+        _fail_stale_video(db, video_id)
     return failed
+
+
+def _fail_stale_video(db: Session, video_id: uuid.UUID) -> None:
+    """Fail a video left processing by a metadata job whose worker was lost."""
+    try:
+        video = db.get(Video, video_id, with_for_update=True, populate_existing=True)
+        if video is not None and video.status is VideoStatus.PROCESSING:
+            transition_status(video, VideoStatus.FAILED, error=STALE_VIDEO_MESSAGE)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "stale_video_update_failed",
+            extra={"video_id": str(video_id), "error_type": type(exc).__name__},
+        )
 
 
 @celery_app.task(name=FAIL_STALE_JOBS_TASK_NAME, soft_time_limit=60, time_limit=90)
