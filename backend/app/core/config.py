@@ -6,9 +6,14 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
 # backend/.env, resolved from this file so it is found regardless of the
 # current working directory.
-ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+ENV_FILE = BACKEND_DIR / ".env"
+
+# backend/storage, git-ignored. Used by the local storage backend.
+DEFAULT_LOCAL_STORAGE_DIR = BACKEND_DIR / "storage"
 
 DATABASE_URL_ENV_VAR = "DATABASE_URL"
 WILDCARD_ORIGIN = "*"
@@ -97,6 +102,20 @@ class Settings(BaseSettings):
     CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
     MAX_UPLOAD_SIZE_MB: int = Field(default=500, gt=0)
     STORAGE_BACKEND: Literal["local", "s3"] = "local"
+    # Root directory of the local storage backend. A relative path is
+    # resolved against the current working directory.
+    LOCAL_STORAGE_DIR: Path = DEFAULT_LOCAL_STORAGE_DIR
+
+    @field_validator("LOCAL_STORAGE_DIR", mode="before")
+    @classmethod
+    def _reject_blank_storage_dir(cls, value: Any) -> Any:
+        # Path("") is the current directory; never store files there by
+        # accident.
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("LOCAL_STORAGE_DIR must not be empty.")
+        return value
 
     @field_validator("DATABASE_URL", "REDIS_URL", mode="before")
     @classmethod
