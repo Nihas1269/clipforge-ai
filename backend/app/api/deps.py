@@ -1,6 +1,8 @@
-"""Shared API dependencies: the auth cookie and the current user."""
+"""Shared API dependencies: the auth cookie, the current user, email delivery
+and the account-flow rate limiters."""
 
 import logging
+from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,12 +10,93 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.csrf import enforce_csrf
+from app.core.errors import AppError
+from app.core.rate_limit import InMemoryRateLimiter
 from app.core.security import InvalidAccessTokenError, decode_access_token
 from app.database import get_db
 from app.models.user import User
 from app.repositories.users import get_by_id
+from app.services.email import EmailNotConfiguredError, EmailSender, build_email_sender
 
 logger = logging.getLogger(__name__)
+
+# Token requests (verification and reset emails) per account or address.
+ACCOUNT_REQUEST_LIMIT = 5
+ACCOUNT_REQUEST_WINDOW_SECONDS = 60 * 60
+# Token redemptions and reset requests per client address.
+CLIENT_ATTEMPT_LIMIT = 10
+CLIENT_ATTEMPT_WINDOW_SECONDS = 15 * 60
+
+
+@dataclass
+class AccountRateLimiters:
+    """Rate limiters of the email verification and password reset endpoints."""
+
+    # Keyed by user id or email address.
+    requests: InMemoryRateLimiter
+    # Keyed by client address.
+    attempts: InMemoryRateLimiter
+
+    @classmethod
+    def default(cls) -> "AccountRateLimiters":
+        return cls(
+            requests=InMemoryRateLimiter(
+                ACCOUNT_REQUEST_LIMIT, ACCOUNT_REQUEST_WINDOW_SECONDS
+            ),
+            attempts=InMemoryRateLimiter(
+                CLIENT_ATTEMPT_LIMIT, CLIENT_ATTEMPT_WINDOW_SECONDS
+            ),
+        )
+
+
+def get_account_rate_limiters(request: Request) -> AccountRateLimiters:
+    """Return the application's account-flow limiters (one set per app)."""
+    limiters = getattr(request.app.state, "account_rate_limiters", None)
+    if limiters is None:
+        limiters = AccountRateLimiters.default()
+        request.app.state.account_rate_limiters = limiters
+    return limiters
+
+
+def client_address(request: Request) -> str:
+    """Return the client's address, used as a rate-limit key."""
+    return request.client.host if request.client else "unknown"
+
+
+def _resolve_email_sender(request: Request, settings: Settings) -> EmailSender:
+    # Built on first use and kept on the app, so a missing or invalid email
+    # configuration never stops the application from starting.
+    sender = getattr(request.app.state, "email_sender", None)
+    if sender is None:
+        sender = build_email_sender(settings)
+        request.app.state.email_sender = sender
+    return sender
+
+
+def get_email_sender(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> EmailSender:
+    """Return the configured email sender, or 503 if email is not configured."""
+    try:
+        return _resolve_email_sender(request, settings)
+    except EmailNotConfiguredError as exc:
+        logger.error("email_not_configured", extra={"reason": str(exc)})
+        raise AppError(
+            503,
+            "email_unavailable",
+            "Email delivery is not available. Try again later.",
+        ) from None
+
+
+def get_optional_email_sender(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> EmailSender | None:
+    """Return the configured email sender, or None if email is not configured."""
+    try:
+        return _resolve_email_sender(request, settings)
+    except EmailNotConfiguredError as exc:
+        logger.warning("email_not_configured", extra={"reason": str(exc)})
+        return None
 
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
 # Sent on every API path; the cookie is never readable by scripts.

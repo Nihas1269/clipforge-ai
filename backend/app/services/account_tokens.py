@@ -1,7 +1,8 @@
 """Email verification and password reset primitives.
 
 These functions issue, send, and redeem single-use tokens. The HTTP endpoints
-and email templates that use them are part of CF-045. Every function takes
+that use them are in app/api/v1/auth.py and the email templates in
+app/services/email.py. Every function takes
 its email sender and rate limiters as arguments so callers (and tests) choose
 the implementation.
 

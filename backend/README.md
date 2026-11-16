@@ -78,6 +78,14 @@ Copy-Item .env.example .env
 | `S3_ACCESS_KEY_ID`            | unset                    | Access key ID. Required for `s3`.                            |
 | `S3_SECRET_ACCESS_KEY`        | unset                    | Secret access key. Required for `s3`.                        |
 | `S3_ADDRESSING_STYLE`         | `auto`                   | `auto`, `path` (MinIO), or `virtual`.                        |
+| `EMAIL_PROVIDER`              | `fake`                   | `fake` (records, never sends; refused in production) or `smtp`. |
+| `EMAIL_FROM`                  | unset                    | Sender address. Required for `smtp`.                         |
+| `FRONTEND_URL`                | unset                    | Web app base URL used in emailed links. Required for `smtp`. |
+| `SMTP_HOST`                   | unset                    | SMTP server. Required for `smtp`.                            |
+| `SMTP_PORT`                   | `587`                    | SMTP port.                                                   |
+| `SMTP_SECURITY`               | `starttls`               | `starttls`, `ssl`, or `none` (refused in production).        |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | unset                | SMTP credentials (both or neither).                          |
+| `SMTP_TIMEOUT_SECONDS`        | `10`                     | SMTP connection/command timeout.                             |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -387,6 +395,10 @@ root and is not versioned.
 | GET    | `/api/v1/users/me`      | —                                    | `200` public user; `401`                                                 |
 | PATCH  | `/api/v1/users/me`      | `{full_name?}`                       | `200` public user; `401`; `422` unknown field or name over 255 chars     |
 | POST   | `/api/v1/users/me/password` | `{current_password, new_password}` | `200` `{access_token, token_type}` + new cookie; `400` wrong current password; `401`; `422` |
+| POST   | `/api/v1/auth/verify-email/request` | — (authenticated)        | `202` email sent; `200` already verified; `401`; `429`; `502` delivery failed; `503` email not configured |
+| POST   | `/api/v1/auth/verify-email/confirm` | `{token}`                | `200` `{message}`; `400` `invalid_token`; `422`; `429`                   |
+| POST   | `/api/v1/auth/password-reset/request` | `{email}`              | `202` `{message}` (always the same); `422`; `429`; `503` email not configured |
+| POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an
 untrusted origin (see Authentication below), and so do the `/users/me`
@@ -461,10 +473,51 @@ addition to `SameSite=Lax` (`app/core/csrf.py`):
   `uvicorn --proxy-headers --forwarded-allow-ips=<proxy ip>`) or list the
   public origin in `CORS_ORIGINS`, or same-origin requests get `403`.
 
-### Email verification and password reset primitives
+### Email verification and password reset
 
-The building blocks for the account flows of CF-045 (which adds the
-endpoints and email templates):
+Endpoints (`app/api/v1/auth.py`, all under `/api/v1/auth` and subject to the
+CSRF origin check):
+
+- **Registration** creates an email verification token and emails it after
+  the response is sent. If email is not configured or delivery fails, the
+  account is still created (the failure is logged) and the user can ask
+  again with `verify-email/request`. `email_verified` stays `false` until a
+  verification token is redeemed.
+- `verify-email/request` requires authentication and only acts on the
+  current user. It sends synchronously, so a delivery failure returns `502`,
+  never a success. Each new token invalidates the previous one.
+- `verify-email/confirm` needs no login (the token proves ownership of the
+  address) and sets `users.email_verified_at`.
+- `password-reset/request` returns the same `202` body for known, unknown,
+  malformed and inactive addresses. The token is created in the request but
+  the email is delivered by a background task after the response, so
+  delivery errors do not change the response; they are logged as
+  `email_delivery_failed`.
+- `password-reset/confirm` sets the new password (8 to 256 characters;
+  a rejected password does not use up the token), increments
+  `token_version` so every existing access token stops working, invalidates
+  all outstanding reset tokens, and clears the caller's auth cookie.
+- Every invalid token — malformed, unknown, expired, already used, superseded,
+  or of the other purpose — gets the same `400 invalid_token` response.
+- Rate limits (`AccountRateLimiters` in `app/api/deps.py`, one set per app):
+  5 verification or reset emails per account/address per hour, and 10 token
+  redemptions and 10 reset requests per client address per 15 minutes.
+  Exceeding them returns `429` with `Retry-After`. Reset requests are limited
+  per address whether or not it has an account.
+- Raw tokens are only ever in the email (in the link's URL fragment). They
+  are never returned by the API or logged; logs carry only user ids, event
+  names and email template names.
+
+Email delivery (`app/services/email.py`) is selected by `EMAIL_PROVIDER`.
+`fake` (the default) records messages in memory and needs no credentials;
+it is used by tests and local development and is refused in production.
+`smtp` uses the standard library `smtplib` with `SMTP_TIMEOUT_SECONDS` and
+STARTTLS or implicit TLS. A missing or invalid email configuration never
+stops the app from starting; the email endpoints return `503
+email_unavailable` and the logs name the missing settings. See
+`docs/setup/email.md` for production configuration.
+
+The building blocks:
 
 - `app/models/auth_token.py` — the `auth_tokens` table. Tokens are 256-bit
   random values (`secrets.token_urlsafe`); only their SHA-256 hash is stored.
@@ -482,9 +535,10 @@ endpoints and email templates):
   password and increments `token_version`, invalidating existing sessions).
   Requests and attempts are rate-limited with the limiter passed in.
 - `app/core/rate_limit.py` — `InMemoryRateLimiter` (sliding window).
-- `app/services/email.py` — the `EmailSender` interface and
-  `FakeEmailSender`, which records messages in memory for tests and local
-  development and needs no email credentials.
+- `app/services/email.py` — the `EmailSender` interface,
+  `FakeEmailSender` (records messages in memory for tests and local
+  development, no credentials), `SmtpEmailSender`, the plain-text templates,
+  and `build_email_sender(settings)`.
 
 ### Limitations
 
@@ -493,13 +547,23 @@ endpoints and email templates):
 - There is no login or password-change rate limiting or account lockout
   yet, and the in-memory
   rate limiter is per process and resets on restart; a shared limiter is part
-  of the security hardening work (CF-042).
+  of the security hardening work (CF-042). With several workers or replicas
+  each process has its own limits, so the effective limits are multiplied.
+- Per-client limits use `request.client.host`. Behind a reverse proxy, run
+  the server with `--proxy-headers --forwarded-allow-ips=<proxy ip>`;
+  otherwise every client shares the proxy's address and one rate-limit
+  bucket.
 - Registration returns `409` for a taken email, as required, which does
   reveal that the address is registered.
-- No real email provider is integrated; CF-045 adds delivery.
-- `request_password_reset` returns the same result for known and unknown
-  addresses, but sends email synchronously only for known ones, so response
-  time can differ. CF-045 should send email asynchronously or pad the timing.
+- Password reset requests deliver email after the response, but the token
+  row is still written synchronously for known addresses, so response times
+  can differ slightly between known and unknown addresses.
+- Email is delivered in-process (FastAPI background tasks) without retries;
+  a message lost to a delivery error or a restart must be requested again.
+  A job queue with retries is future work.
+- Emails are plain text only. The frontend pages `/verify-email` and
+  `/reset-password` that read the token from the URL fragment are not part of
+  the backend.
 
 ## Error format
 
