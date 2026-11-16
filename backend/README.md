@@ -28,11 +28,69 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+## Configuration
+
+All backend settings are defined in one typed module,
+`app/core/config.py`, as a `pydantic-settings` `Settings` class. Read them
+through the cached accessor `get_settings()`; do not read configuration
+environment variables directly elsewhere:
+
+```python
+from app.core.config import get_settings
+
+settings = get_settings()
+```
+
+Settings are loaded from environment variables and from `backend/.env`.
+Environment variables take precedence over values in the file. Settings are
+loaded once per process; restart the server after changing them.
+
+Create your local `.env` from the template:
+
+```bash
+# macOS / Linux
+cp .env.example .env
+
+# Windows (PowerShell)
+Copy-Item .env.example .env
+```
+
+`.env` is ignored by Git. Never commit it or put real production secrets in
+`.env.example`.
+
+| Variable                      | Default                  | Description                                                  |
+| ----------------------------- | ------------------------ | ------------------------------------------------------------ |
+| `APP_ENV`                     | `development`            | `development`, `test`, or `production`.                      |
+| `APP_NAME`                    | `ClipForge AI`           | Application name, used as the API title.                     |
+| `DATABASE_URL`                | unset                    | PostgreSQL connection string (see below).                    |
+| `REDIS_URL`                   | unset                    | Optional Redis connection string.                            |
+| `SECRET_KEY`                  | development-only default | Secret for signing tokens. Required in production.           |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30`                     | Access token lifetime in minutes (must be positive).         |
+| `CORS_ORIGINS`                | empty                    | Comma-separated list of allowed origins (see below).         |
+| `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (must be positive).         |
+| `STORAGE_BACKEND`             | `local`                  | `local` or `s3`.                                             |
+
+Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
+the application at startup with a validation error.
+
+### Production secret
+
+When `APP_ENV=production`, startup fails with a clear error if `SECRET_KEY` is
+missing or empty, or if it is a known development default or placeholder (the
+built-in default, the `.env.example` placeholder, or values such as
+`change-me` or `secret`). Generate a strong value, for example:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Set it in the production environment, never in a committed file.
+
 ## Database configuration
 
 The backend uses PostgreSQL via SQLAlchemy 2.x and the `psycopg2` driver.
-The connection string is read from the `DATABASE_URL` environment variable.
-Never commit real credentials to the repository.
+The connection string is the `DATABASE_URL` setting (environment variable or
+`backend/.env`). Never commit real credentials to the repository.
 
 URL format:
 
@@ -40,7 +98,7 @@ URL format:
 postgresql://<user>:<password>@<host>:<port>/<database>
 ```
 
-Set the variable before starting the server:
+Set it in `backend/.env`, or export it before starting the server:
 
 ```bash
 # macOS / Linux
@@ -59,7 +117,8 @@ them in production.
 
 The database layer lives in:
 
-- `app/config.py` — reads `DATABASE_URL` from the environment.
+- `app/core/config.py` — `Settings.DATABASE_URL` and `get_database_url()`,
+  which raises a clear error when it is not set.
 - `app/database.py` — declarative `Base` for models, engine and session
   factory creation, and the `get_db` FastAPI dependency.
 
@@ -91,7 +150,7 @@ The API is served at `http://127.0.0.1:8000`. Interactive docs are available at 
 ## CORS configuration
 
 Allowed cross-origin requests are configured with the `CORS_ORIGINS`
-environment variable, a comma-separated list of origins:
+setting, a comma-separated list of origins:
 
 ```bash
 # macOS / Linux
@@ -180,4 +239,5 @@ pytest
 ```
 
 The tests use an in-memory SQLite database and do not require PostgreSQL or
-`DATABASE_URL` to be set.
+`DATABASE_URL` to be set. They ignore `backend/.env` and clear the
+`get_settings()` cache between tests (see `tests/conftest.py`).
