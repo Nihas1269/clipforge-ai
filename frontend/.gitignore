@@ -1,0 +1,21 @@
+# Dependencies
+/node_modules
+
+# Next.js build output
+/.next
+/out
+/build
+next-env.d.ts
+
+# Test coverage
+/coverage
+
+# TypeScript
+*.tsbuildinfo
+
+# Local environment files (may contain credentials)
+.env
+.env*.local
+
+# Logs
+npm-debug.log*

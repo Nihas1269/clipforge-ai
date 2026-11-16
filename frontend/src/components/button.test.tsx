@@ -1,0 +1,52 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import { Button } from "@/components/button";
+
+describe("Button", () => {
+  it("defaults to type=button so it does not submit forms", () => {
+    render(<Button>Save</Button>);
+
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("type", "button");
+  });
+
+  it("allows overriding the type", () => {
+    render(<Button type="submit">Save</Button>);
+
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("type", "submit");
+  });
+
+  it("calls onClick when clicked", () => {
+    const onClick = vi.fn();
+    render(<Button onClick={onClick}>Save</Button>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onClick when disabled", () => {
+    const onClick = vi.fn();
+    render(
+      <Button onClick={onClick} disabled>
+        Save
+      </Button>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("merges custom class names with the variant classes", () => {
+    render(
+      <Button variant="secondary" className="w-full">
+        Cancel
+      </Button>,
+    );
+
+    const button = screen.getByRole("button", { name: "Cancel" });
+    expect(button).toHaveClass("w-full");
+    expect(button).toHaveClass("bg-surface-raised");
+  });
+});
