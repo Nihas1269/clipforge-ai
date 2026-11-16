@@ -50,6 +50,13 @@ export DATABASE_URL="postgresql://<user>:<password>@localhost:5432/clipforge"
 $env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/clipforge"
 ```
 
+To run PostgreSQL, Redis, and MinIO locally with Docker Compose, see
+`docs/local-development.md`, which explains how to build `DATABASE_URL` from
+the local PostgreSQL settings used by `docker-compose.yml` (note that the
+Compose PostgreSQL service is published on host port `5433`). `.env.example` in
+this directory lists the matching development-only backend values; never use
+them in production.
+
 The database layer lives in:
 
 - `app/config.py` — reads `DATABASE_URL` from the environment.
