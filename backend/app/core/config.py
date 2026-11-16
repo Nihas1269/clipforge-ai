@@ -82,8 +82,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
-        # backend/.env may hold variables for features that do not read them
-        # through Settings yet (for example S3_*).
+        # backend/.env may hold variables that Settings does not read (for
+        # example the Docker Compose MINIO_ROOT_* values).
         extra="ignore",
         # Never include submitted values (such as SECRET_KEY) in error messages.
         hide_input_in_errors=True,
@@ -105,6 +105,38 @@ class Settings(BaseSettings):
     # Root directory of the local storage backend. A relative path is
     # resolved against the current working directory.
     LOCAL_STORAGE_DIR: Path = DEFAULT_LOCAL_STORAGE_DIR
+    # S3-compatible storage (AWS S3, Cloudflare R2, MinIO). Optional here so the
+    # app starts without them; get_storage() raises a clear error when
+    # STORAGE_BACKEND=s3 and a required value is missing. S3_ENDPOINT_URL is
+    # unset for AWS S3.
+    S3_ENDPOINT_URL: str | None = None
+    S3_REGION: str | None = None
+    S3_BUCKET: str | None = None
+    S3_ACCESS_KEY_ID: str | None = None
+    S3_SECRET_ACCESS_KEY: SecretStr | None = None
+    S3_ADDRESSING_STYLE: Literal["auto", "path", "virtual"] = "auto"
+
+    @field_validator(
+        "S3_ENDPOINT_URL",
+        "S3_REGION",
+        "S3_BUCKET",
+        "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY",
+        mode="before",
+    )
+    @classmethod
+    def _blank_s3_setting_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("S3_ADDRESSING_STYLE", mode="before")
+    @classmethod
+    def _normalize_addressing_style(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower() or "auto"
+        return value
 
     @field_validator("LOCAL_STORAGE_DIR", mode="before")
     @classmethod

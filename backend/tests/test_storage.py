@@ -487,9 +487,18 @@ def test_get_storage_accepts_explicit_settings(tmp_path):
     assert storage.root == tmp_path.resolve()
 
 
-def test_get_storage_rejects_unimplemented_backend():
+def test_get_storage_rejects_unconfigured_s3_backend():
+    # S3 behaviour is covered in tests/test_storage_s3.py.
+    settings = Settings(
+        STORAGE_BACKEND="s3",
+        S3_BUCKET=None,
+        S3_REGION=None,
+        S3_ACCESS_KEY_ID=None,
+        S3_SECRET_ACCESS_KEY=None,
+    )
+
     with pytest.raises(StorageConfigurationError, match="s3"):
-        get_storage(Settings(STORAGE_BACKEND="s3"))
+        get_storage(settings)
 
 
 def test_local_storage_dir_defaults_to_backend_storage(monkeypatch):
