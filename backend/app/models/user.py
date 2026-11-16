@@ -1,10 +1,14 @@
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, DateTime, String, Uuid, false, func, true
-from sqlalchemy.orm import Mapped, mapped_column, validates
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.video import Video
 
 # Common upper bound: local part (64) + "@" + domain (255).
 EMAIL_MAX_LENGTH = 320
@@ -58,6 +62,11 @@ class User(Base):
         default=_utcnow,
         onupdate=_utcnow,
         server_default=func.now(),
+    )
+
+    # The database deletes a user's videos (ON DELETE CASCADE).
+    videos: Mapped[list["Video"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
     @validates("email")

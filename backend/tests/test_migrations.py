@@ -127,6 +127,110 @@ def test_downgrade_removes_users_table(database_url, engine):
     assert "users" not in inspect(engine).get_table_names()
 
 
+INSERT_VIDEO = text(
+    "INSERT INTO videos "
+    "(id, user_id, original_filename, content_type, size_bytes, storage_key) "
+    "VALUES (:id, :user_id, 'talk.mp4', 'video/mp4', 1024, 'key')"
+)
+
+
+def test_upgrade_creates_videos_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {column["name"]: column for column in inspector.get_columns("videos")}
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "storage_key",
+        "status",
+        "error_message",
+        "duration_seconds",
+        "width",
+        "height",
+        "fps",
+        "created_at",
+        "updated_at",
+    }
+    for name in (
+        "user_id",
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "storage_key",
+        "status",
+        "created_at",
+        "updated_at",
+    ):
+        assert columns[name]["nullable"] is False, name
+    for name in ("error_message", "duration_seconds", "width", "height", "fps"):
+        assert columns[name]["nullable"] is True, name
+
+    indexes = {index["name"]: index for index in inspector.get_indexes("videos")}
+    assert indexes["ix_videos_user_id"]["column_names"] == ["user_id"]
+    assert not indexes["ix_videos_user_id"]["unique"]
+
+    (foreign_key,) = inspector.get_foreign_keys("videos")
+    assert foreign_key["referred_table"] == "users"
+    assert foreign_key["constrained_columns"] == ["user_id"]
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+
+def test_migrated_videos_table_applies_defaults_and_constraints(
+    database_url, engine
+):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": uuid.uuid4().hex, "user_id": user_id})
+        row = connection.execute(
+            text("SELECT status, created_at, updated_at FROM videos")
+        ).one()
+    assert row.status == "uploaded"
+    assert row.created_at is not None
+    assert row.updated_at is not None
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO videos (id, user_id, original_filename, "
+                    "content_type, size_bytes, storage_key, status) VALUES "
+                    "(:id, :user_id, 'a.mp4', 'video/mp4', 1, 'k', 'archived')"
+                ),
+                {"id": uuid.uuid4().hex, "user_id": user_id},
+            )
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO videos (id, user_id, original_filename, "
+                    "content_type, size_bytes, storage_key) VALUES "
+                    "(:id, :user_id, 'a.mp4', 'video/mp4', -1, 'k')"
+                ),
+                {"id": uuid.uuid4().hex, "user_id": user_id},
+            )
+
+
+def test_downgrade_of_videos_migration_keeps_users(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0001")
+
+    table_names = inspect(engine).get_table_names()
+    assert "videos" not in table_names
+    assert "users" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

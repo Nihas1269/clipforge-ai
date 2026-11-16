@@ -298,6 +298,42 @@ Email validation is intentionally basic (a non-empty local part and domain
 separated by `@`, no whitespace, at most 320 characters); stricter
 validation belongs to the request schemas that will use these helpers.
 
+## Videos and processing status
+
+`app/models/video.py` defines the `Video` model (`videos` table, migration
+`0002`). Each video belongs to a user (`user_id`, indexed, `ON DELETE
+CASCADE`) and stores the upload's `original_filename`, `content_type`,
+`size_bytes` (must be `>= 0`) and `storage_key`. `duration_seconds`, `width`,
+`height` and `fps` are nullable and filled in once the video is probed.
+
+`status` is one of `uploaded` (default), `processing`, `ready` or `failed`,
+stored as a string with a `CHECK` constraint. Change it only with
+`transition_status(video, new_status, error=None)`, which holds the single
+table of allowed transitions (`ALLOWED_TRANSITIONS`):
+
+| From         | To           | Meaning     |
+| ------------ | ------------ | ----------- |
+| `uploaded`   | `processing` | start       |
+| `processing` | `ready`      | success     |
+| `processing` | `failed`     | failure     |
+| `failed`     | `processing` | retry       |
+| `ready`      | `processing` | reprocess   |
+
+Any other change, including to the same status, raises
+`InvalidStatusTransitionError` and leaves the video unchanged. Moving to
+`failed` stores `error` in `error_message` (a generic message if it is missing
+or blank); every other transition clears `error_message`, and passing `error`
+to one raises `ValueError`. The helper does not commit; the caller does. Each
+transition is logged as `video_status_changed` with the video id and the old
+and new status (never the error text).
+
+`app/schemas/video.py` provides the `VideoRead` and `VideoList` response
+schemas. `VideoRead` deliberately omits the internal `storage_key`.
+
+Limitation: `transition_status` checks the status held in memory, so two
+workers changing the same video concurrently can both succeed; callers that
+need this guarantee must lock the row (for example `SELECT ... FOR UPDATE`).
+
 ## Running the server
 
 ```bash
