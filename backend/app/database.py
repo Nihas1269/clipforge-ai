@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.config import get_database_url
+from app.core.config import get_database_url
 
 
 class Base(DeclarativeBase):

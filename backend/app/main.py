@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import API_V1_PREFIX, api_router
-from app.config import Settings, get_settings, sanitize_cors_origins
+from app.core.config import Settings, get_settings, sanitize_cors_origins
 from app.core.errors import register_exception_handlers
 
 
@@ -11,7 +11,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
 
-    app = FastAPI(title="ClipForge AI")
+    app = FastAPI(title=settings.APP_NAME)
 
     # Sanitize again here so a wildcard can never be combined with
     # allow_credentials=True, even if the settings list was mutated after

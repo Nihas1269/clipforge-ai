@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
-from app.config import Settings, get_settings, parse_cors_origins, sanitize_cors_origins
+from app.core.config import (
+    Settings,
+    get_settings,
+    parse_cors_origins,
+    sanitize_cors_origins,
+)
 from app.core.errors import AppError
 from app.main import create_app
 

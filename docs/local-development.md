@@ -98,15 +98,15 @@ volumes. The next `docker compose up -d` starts with empty services.
 
 ### Connecting the backend
 
-The backend reads its settings from the process environment and does not load
-`.env` files. Set the required variables in your local shell (or your IDE's
-run configuration) before starting the server; see `backend/README.md` for
-the exact commands. Do not commit files containing these values.
+The backend reads its settings from the process environment and from
+`backend/.env` (environment variables take precedence). Copy
+`backend/.env.example` to `backend/.env`, which is ignored by Git; see
+`backend/README.md` for the exact commands and the full list of settings. Do
+not commit files containing these values.
 
 `backend/.env.example` lists ready-to-use backend values for the default
-Compose credentials. Use it as the reference when setting the variables in
-your shell. The backend settings correspond to the Compose services as
-follows:
+Compose credentials. The backend settings correspond to the Compose services
+as follows:
 
 - `DATABASE_URL` (required) — the `postgres` service at `localhost:5433`,
   built from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`:
@@ -119,8 +119,9 @@ follows:
 - `CORS_ORIGINS` (optional) — not related to Compose; for example
   `http://localhost:3000` for the local frontend.
 
-The backend currently reads only `DATABASE_URL` and `CORS_ORIGINS`; the Redis
-and S3 variables are provided for features that will use them.
+`REDIS_URL` is part of the backend settings but not used by any feature yet.
+The S3 variables are not read by the backend yet; they are provided for the
+storage feature that will use them.
 
 If you change values in the root `.env`, update the backend variables to
 match.
