@@ -445,6 +445,123 @@ def test_downgrade_of_pending_storage_deletions_keeps_processing_jobs(
     assert "processing_jobs" in table_names
 
 
+def test_upgrade_creates_transcript_tables(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {column["name"]: column for column in inspector.get_columns("transcripts")}
+    assert set(columns) == {
+        "id",
+        "video_id",
+        "language",
+        "requested_language",
+        "provider",
+        "model",
+        "full_text",
+        "created_at",
+    }
+    for name in ("video_id", "provider", "full_text", "created_at"):
+        assert columns[name]["nullable"] is False, name
+    for name in ("language", "requested_language", "model"):
+        assert columns[name]["nullable"] is True, name
+    indexes = {index["name"]: index for index in inspector.get_indexes("transcripts")}
+    assert indexes["ix_transcripts_video_id"]["column_names"] == ["video_id"]
+    assert indexes["ix_transcripts_video_id"]["unique"]
+    (foreign_key,) = inspector.get_foreign_keys("transcripts")
+    assert foreign_key["referred_table"] == "videos"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+    columns = {
+        column["name"]: column for column in inspector.get_columns("transcript_segments")
+    }
+    assert set(columns) == {
+        "id",
+        "transcript_id",
+        "index",
+        "start_seconds",
+        "end_seconds",
+        "text",
+        "words",
+    }
+    assert columns["words"]["nullable"] is True
+    for name in ("transcript_id", "index", "start_seconds", "end_seconds", "text"):
+        assert columns[name]["nullable"] is False, name
+    (unique,) = inspector.get_unique_constraints("transcript_segments")
+    assert unique["column_names"] == ["transcript_id", "index"]
+    (foreign_key,) = inspector.get_foreign_keys("transcript_segments")
+    assert foreign_key["referred_table"] == "transcripts"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+
+def test_migrated_transcript_tables_enforce_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+    video_id = uuid.uuid4().hex
+    transcript_id = uuid.uuid4().hex
+    insert_transcript = text(
+        "INSERT INTO transcripts (id, video_id, provider, full_text) "
+        "VALUES (:id, :video_id, 'fake', '')"
+    )
+    insert_segment = text(
+        'INSERT INTO transcript_segments (id, transcript_id, "index", '
+        "start_seconds, end_seconds, text) "
+        "VALUES (:id, :transcript_id, :index, :start, :end, 'x')"
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": video_id, "user_id": user_id})
+        connection.execute(insert_transcript, {"id": transcript_id, "video_id": video_id})
+        connection.execute(
+            insert_segment,
+            {"id": uuid.uuid4().hex, "transcript_id": transcript_id, "index": 0, "start": 0.0, "end": 1.5},
+        )
+        row = connection.execute(
+            text("SELECT language, created_at FROM transcripts")
+        ).one()
+    assert row.language is None
+    assert row.created_at is not None
+
+    # One transcript per video.
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                insert_transcript, {"id": uuid.uuid4().hex, "video_id": video_id}
+            )
+
+    invalid_segments = [
+        {"index": 0, "start": 2.0, "end": 3.0},  # duplicate index
+        {"index": -1, "start": 2.0, "end": 3.0},
+        {"index": 1, "start": -1.0, "end": 3.0},
+        {"index": 1, "start": 3.0, "end": 3.0},
+        {"index": 1, "start": 4.0, "end": 3.0},
+    ]
+    for values in invalid_segments:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_segment,
+                    {"id": uuid.uuid4().hex, "transcript_id": transcript_id, **values},
+                )
+
+
+def test_downgrade_of_transcripts_migration_keeps_storage_deletions(
+    database_url, engine
+):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0005")
+
+    table_names = inspect(engine).get_table_names()
+    assert "transcripts" not in table_names
+    assert "transcript_segments" not in table_names
+    assert "pending_storage_deletions" in table_names
+    assert "videos" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

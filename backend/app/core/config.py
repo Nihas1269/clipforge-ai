@@ -152,6 +152,18 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: SecretStr | None = None
     SMTP_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+    # Speech-to-text provider. A plain string, not a Literal, so an unknown
+    # name does not stop the app from starting; get_transcription_provider()
+    # raises a clear error when transcription is first used. "fake" returns
+    # deterministic placeholder text and is refused in production.
+    TRANSCRIPTION_PROVIDER: str = "fake"
+
+    @field_validator("TRANSCRIPTION_PROVIDER", mode="before")
+    @classmethod
+    def _normalize_transcription_provider(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower() or "fake"
+        return value
 
     @field_validator(
         "EMAIL_FROM",

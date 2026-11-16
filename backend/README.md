@@ -88,6 +88,7 @@ Copy-Item .env.example .env
 | `SMTP_SECURITY`               | `starttls`               | `starttls`, `ssl`, or `none` (refused in production).        |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | unset                | SMTP credentials (both or neither).                          |
 | `SMTP_TIMEOUT_SECONDS`        | `10`                     | SMTP connection/command timeout.                             |
+| `TRANSCRIPTION_PROVIDER`      | `fake`                   | Speech-to-text provider (see Transcripts below); `fake` is refused in production. |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -347,6 +348,74 @@ schemas. `VideoRead` deliberately omits the internal `storage_key`.
 Limitation: `transition_status` checks the status held in memory, so two
 workers changing the same video concurrently can both succeed; callers that
 need this guarantee must lock the row (for example `SELECT ... FOR UPDATE`).
+
+## Transcripts
+
+`app/models/transcript.py` defines how transcripts are stored (migration
+`0006`):
+
+- `transcripts`: `id`, `video_id` (`ON DELETE CASCADE`, unique index
+  `ix_transcripts_video_id`, so a video has at most one transcript and it
+  belongs to the video's owner), `language`, `requested_language`,
+  `provider`, `model`, `full_text`, `created_at`.
+- `transcript_segments`: `id`, `transcript_id` (`ON DELETE CASCADE`),
+  `index`, `start_seconds`, `end_seconds`, `text`, and `words` (a JSON list
+  of `{word, start, end}`, or `NULL` when no word timings were reported).
+  A unique constraint on `(transcript_id, index)` keeps the order unique and
+  is the index used to load segments; `CHECK` constraints require
+  `index >= 0`, `start_seconds >= 0` and `end_seconds > start_seconds`.
+  `Transcript.segments` is always ordered by `index`.
+
+Deleting a video (or its user) deletes its transcript and segments;
+`delete_video` also deletes them explicitly for databases that do not enforce
+foreign keys.
+
+**Languages.** `language` is the language the provider reported and
+`requested_language` the one the user asked for; `NULL` means unknown
+(respectively automatic detection). Both are ISO 639 codes with optional
+BCP 47 subtags (`en`, `te`, `hi-IN`), validated by
+`normalize_language()` in `app/transcription/base.py`, which accepts
+`None`/`""`/`auto` for automatic detection and keeps `und` as an explicit
+"unknown". Codes are only trimmed and their primary code lowercased; a
+transcript is never relabeled with another language. Text is stored as given,
+so non-Latin scripts and code-switched text keep their original form.
+
+**Providers** (`app/transcription/`):
+
+- `base.py` — the `TranscriptionProvider` protocol
+  (`transcribe(audio_path, language=None) -> TranscriptionResult`) and the
+  frozen result dataclasses `TranscriptionResult` (language, segments,
+  provider, model, `full_text`), `TranscriptionSegment` (start, end, text,
+  optional words) and `WordTiming`. They validate on creation: timestamps
+  must be finite and non-negative, segments must end after they start and be
+  in chronological order, words must not end before they start.
+  `check_within_duration()` rejects timestamps past the end of the audio.
+  Failures raise `TranscriptionError` subclasses.
+- `fake.py` — `FakeTranscriptionProvider`, for development and tests. It
+  makes no network calls; it reads the duration of a WAV file (other files
+  are treated as 16 kHz 16-bit mono PCM, so the duration follows from the
+  size) and returns 5-second segments covering it, with placeholder text and
+  evenly spaced word timings. The same file always gives the same result;
+  an empty or silent (< 1 ms) file gives zero segments.
+- `get_transcription_provider()` (in `app/transcription/__init__.py`)
+  returns the provider named by `TRANSCRIPTION_PROVIDER` (default `fake`).
+  An unknown name does not stop the app from starting but raises
+  `TranscriptionConfigurationError` when transcription is used; so does
+  `fake` when `APP_ENV=production`.
+
+`app/repositories/transcripts.py` provides `get_transcript_for_video` and
+`replace_transcript(db, video_id, result, requested_language=None)`, which
+stores a result as the video's transcript, replacing any earlier one so a
+retried job never creates duplicates. It flushes but does not commit, and
+logs `transcript_saved` (ids, provider, language, segment count; never the
+text).
+
+Limitations: only the fake provider exists, so `TRANSCRIPTION_PROVIDER` has
+no production value yet. No transcription job or API endpoint uses this
+yet. No claims are made about transcription quality for regional languages
+(Telugu, Hindi, Tamil, Kannada, Malayalam); the tests cover storage of their
+scripts, not recognition. Segments may overlap if a provider reports them
+that way; only their start times must be in order.
 
 ## Video upload
 

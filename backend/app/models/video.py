@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.transcript import Transcript
     from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,13 @@ class Video(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="videos")
+    # The database deletes the transcript with the video (ON DELETE CASCADE).
+    transcript: Mapped["Transcript | None"] = relationship(
+        back_populates="video",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
     def __repr__(self) -> str:
         # No filename or storage key: they can contain personal data.
