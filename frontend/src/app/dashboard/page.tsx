@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: `Dashboard — ${PRODUCT_NAME}`,
 };
 
-/** Placeholder until the dashboard is built; it does not check the session yet. */
+/** Placeholder until the dashboard is built; the session is checked by `layout.tsx`. */
 export default function DashboardPage() {
   return (
     <Container className="py-16 sm:py-24">
