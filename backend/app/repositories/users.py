@@ -68,3 +68,24 @@ def create_user(
 
     logger.info("user_created", extra={"user_id": str(user.id)})
     return user
+
+
+def update_full_name(db: Session, user: User, full_name: str | None) -> User:
+    """Set and commit the user's full name."""
+    user.full_name = full_name
+    db.commit()
+    logger.info("user_profile_updated", extra={"user_id": str(user.id)})
+    return user
+
+
+def set_password(db: Session, user: User, new_password: str) -> User:
+    """Hash and commit a new password.
+
+    Increments the token version, so every access token issued before the
+    change stops working. Raises ValueError for an empty password.
+    """
+    user.hashed_password = hash_password(new_password)
+    user.token_version += 1
+    db.commit()
+    logger.info("user_password_changed", extra={"user_id": str(user.id)})
+    return user
