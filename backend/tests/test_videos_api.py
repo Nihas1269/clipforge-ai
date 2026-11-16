@@ -4,16 +4,20 @@ import uuid
 
 import pytest
 import starlette.formparsers
+from celery import Task
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (registers every model on Base.metadata)
+from app import database
 from app.api.v1.videos import MULTIPART_OVERHEAD_BYTES, get_video_storage
 from app.core.config import Settings, get_settings
 from app.database import Base, create_db_engine, create_session_factory, get_db
 from app.main import create_app
+from app.media.ffmpeg import MediaError, MediaInfo
+from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.video import Video, VideoStatus
 from app.services.video_upload import (
     EBML,
@@ -23,6 +27,11 @@ from app.services.video_upload import (
     sanitize_filename,
 )
 from app.storage import LocalStorage, StorageError, video_source_key
+from app.worker import metadata
+from app.worker.celery_app import celery_app, configure_celery_app
+from app.worker.jobs import JobTask
+from app.worker.metadata import EXTRACT_METADATA_TASK_NAME, QUEUE_FAILURE_MESSAGE
+from tests.media_helpers import make_test_video, requires_ffmpeg
 
 SQLITE_IN_MEMORY_URL = "sqlite:///:memory:"
 SECRET = "test-only-jwt-signing-secret-0123456789abcdef"
@@ -84,6 +93,35 @@ def db(session_factory):
 @pytest.fixture
 def storage_dir(tmp_path):
     return tmp_path / "storage"
+
+
+@pytest.fixture(autouse=True)
+def published_jobs(monkeypatch):
+    """Record published Celery messages instead of sending them to a broker.
+
+    Uploads queue a metadata job; here it stays queued, so the video keeps
+    the status `uploaded`. Tests that run the job use `eager_jobs`.
+    """
+    calls: list[dict] = []
+
+    def fake_apply_async(self, args=None, kwargs=None, task_id=None, **options):
+        calls.append({"task": self.name, "args": args, "task_id": task_id})
+
+    monkeypatch.setitem(celery_app.conf, "task_always_eager", False)
+    monkeypatch.setitem(celery_app.conf, "broker_url", "memory://")
+    monkeypatch.setattr(JobTask, "apply_async", fake_apply_async)
+    return calls
+
+
+@pytest.fixture
+def eager_jobs(session_factory, monkeypatch):
+    """Run queued jobs immediately against the test database."""
+    monkeypatch.setattr(database, "_session_factory", session_factory)
+    # Undo published_jobs' fake publishing (autouse fixtures run first).
+    monkeypatch.setattr(JobTask, "apply_async", Task.apply_async)
+    configure_celery_app(celery_app, Settings(APP_ENV="test"))
+    yield
+    configure_celery_app(celery_app, Settings(APP_ENV="test"))
 
 
 @pytest.fixture
@@ -241,6 +279,113 @@ def test_upload_belongs_to_the_authenticated_user(client, db, storage_dir):
     videos = {str(v.id): v for v in db.scalars(select(Video))}
     assert videos[alice.json()["id"]].storage_key.startswith(f"users/{alice_id}/")
     assert videos[bob.json()["id"]].storage_key.startswith(f"users/{bob_id}/")
+
+
+# Metadata extraction after upload
+
+
+def test_upload_queues_metadata_extraction(client, db, token, published_jobs):
+    response = _upload(client, token)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "uploaded"
+    job = db.scalars(select(ProcessingJob)).one()
+    assert job.job_type == JobType.METADATA
+    assert job.status == JobStatus.QUEUED
+    assert str(job.video_id) == body["id"]
+    assert str(job.user_id) == body["user_id"]
+    assert job.payload == {"video_id": body["id"]}
+    assert job.idempotency_key == body["id"]
+    assert job.request_id == response.headers["x-request-id"]
+    assert published_jobs == [
+        {"task": EXTRACT_METADATA_TASK_NAME, "args": [str(job.id)], "task_id": job.celery_task_id}
+    ]
+
+
+def test_rejected_upload_queues_nothing(client, db, token, published_jobs):
+    response = _upload(client, token, filename="clip.avi")
+
+    assert response.status_code == 415
+    assert published_jobs == []
+    assert db.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+
+
+def test_upload_whose_job_cannot_be_queued_is_marked_failed(
+    client, db, token, storage_dir, monkeypatch
+):
+    monkeypatch.setitem(celery_app.conf, "broker_url", None)
+
+    response = _upload(client, token)
+
+    # The file was stored, so the upload itself succeeded.
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["error_message"] == QUEUE_FAILURE_MESSAGE
+    video = db.scalars(select(Video)).one()
+    assert video.status is VideoStatus.FAILED
+    job = db.scalars(select(ProcessingJob)).one()
+    assert job.status == JobStatus.FAILED
+    assert job.active_key is None
+    assert LocalStorage(storage_dir).exists(video.storage_key)
+
+
+def test_upload_runs_metadata_extraction(client, db, token, eager_jobs, monkeypatch):
+    def fake_probe(path, *, timeout=None, settings=None):
+        return MediaInfo(42.0, 1280, 720, 30.0, True, True, "h264", "aac")
+
+    monkeypatch.setattr(metadata, "probe", fake_probe)
+
+    response = _upload(client, token)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["duration_seconds"] == 42.0
+    assert (body["width"], body["height"], body["fps"]) == (1280, 720, 30.0)
+    assert db.scalars(select(ProcessingJob)).one().status == JobStatus.SUCCEEDED
+
+
+def test_upload_that_is_not_a_valid_video_ends_failed(
+    client, db, token, eager_jobs, monkeypatch
+):
+    def fake_probe(path, *, timeout=None, settings=None):
+        raise MediaError("ffprobe could not read the file.", "moov atom not found")
+
+    monkeypatch.setattr(metadata, "probe", fake_probe)
+
+    response = _upload(client, token)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["error_message"] == metadata.INVALID_VIDEO_MESSAGE
+    assert "moov" not in response.text
+    assert db.scalars(select(ProcessingJob)).one().status == JobStatus.FAILED
+
+
+@requires_ffmpeg
+def test_real_upload_is_probed_and_ready(client, token, eager_jobs, tmp_path):
+    source = make_test_video(tmp_path / "sample.mp4")
+
+    response = _upload(client, token, content=source.read_bytes())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["duration_seconds"] == pytest.approx(2.0, abs=0.25)
+    assert (body["width"], body["height"]) == (320, 240)
+
+
+@requires_ffmpeg
+def test_real_invalid_upload_ends_failed(client, token, eager_jobs):
+    # Valid MP4 signature, but not a playable file.
+    response = _upload(client, token)
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "failed"
+    assert response.json()["error_message"] == metadata.INVALID_VIDEO_MESSAGE
 
 
 def test_file_at_exact_size_limit_is_accepted(client, token):
