@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. ClipForge uses a single dark theme modeled on an editing
+ * workspace: neutral, low-glare surfaces so footage stays the focus, with one
+ * warm accent for primary actions and focus. Tailwind exposes each token as a
+ * utility, e.g. `bg-surface`, `text-fg-muted`, `border-border`.
+ */
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Surfaces, from the page background up to raised controls. */
+  --color-canvas: #0b0d10;
+  --color-surface: #13161b;
+  --color-surface-raised: #1b1f26;
+  --color-surface-hover: #242933;
+  --color-border: #2a2f38;
+
+  /* Text. */
+  --color-fg: #e8eaed;
+  --color-fg-muted: #9aa3ae;
+
+  /* Accent for primary actions and focus rings. */
+  --color-accent: #f5a524;
+  --color-accent-hover: #ffb84a;
+  --color-accent-fg: #14110a;
+
+  /* Status colors for success, error, and informational states. */
+  --color-success: #3fb97a;
+  --color-danger: #f0606a;
+  --color-info: #5aa9f0;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
