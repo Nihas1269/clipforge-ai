@@ -46,8 +46,11 @@ services:
       retries: 10
 
   minio:
-    # Official MinIO image, pinned to a release tag.
-    image: docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # MinIO no longer publishes pullable community images (docker.io/minio/minio
+    # denies anonymous pulls), so this uses pgsty/silo, a community build of the
+    # MinIO server (source: https://github.com/pgsty/silo). Pinned by digest so
+    # the image cannot change silently. See docs/local-development.md.
+    image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z@sha256:c20d112390b9a9ce8c11b8af95ad35bcaa62f4759663c09c936cd8d2b511f329
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-clipforge_dev}

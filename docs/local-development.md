@@ -11,16 +11,24 @@ The root `docker-compose.yml` runs the services the backend depends on. The
 application itself is not containerized; run the backend as described in
 `backend/README.md`.
 
-| Service    | Image                                      | Host port(s)                      | Data volume     |
-| ---------- | ------------------------------------------ | --------------------------------- | --------------- |
-| `postgres` | `postgres:16`                              | `5433`                            | `postgres-data` |
-| `redis`    | `redis:7.4`                                | `6379`                            | none            |
-| `minio`    | `minio/minio:RELEASE.2025-04-22T22-12-26Z` | `9000` (S3 API), `9001` (console) | `minio-data`    |
+| Service    | Image                                               | Host port(s)                      | Data volume     |
+| ---------- | --------------------------------------------------- | --------------------------------- | --------------- |
+| `postgres` | `postgres:16`                                       | `5433`                            | `postgres-data` |
+| `redis`    | `redis:7.4`                                         | `6379`                            | none            |
+| `minio`    | `pgsty/silo` (MinIO server build, pinned by digest) | `9000` (S3 API), `9001` (console) | `minio-data`    |
 
 Ports are bound to `127.0.0.1`, so the services are only reachable from your
 machine. PostgreSQL is published on host port `5433` instead of the default
 `5432` so it does not clash with a PostgreSQL server already installed on your
 machine; inside the container it still listens on `5432`.
+
+**About the MinIO image.** MinIO no longer publishes pullable community
+container images (`docker.io/minio/minio` denies anonymous pulls), so the
+`minio` service uses [`pgsty/silo`](https://github.com/pgsty/silo), a community
+build of the MinIO server with the same `server` command, S3 API, web console,
+and `MINIO_ROOT_*` variables. `docker-compose.yml` pins it by digest, so a
+changed image cannot be pulled silently. It is used only for local
+development.
 
 ### Requirements
 
