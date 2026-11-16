@@ -286,6 +286,8 @@ sees it.
   `create_user`. `create_user` hashes the password, commits the user, and
   raises `DuplicateEmailError` if the email is already registered (in any
   letter case) or `ValueError` for an invalid email or empty password.
+  `update_full_name` and `set_password` commit profile changes;
+  `set_password` also increments `token_version`.
 - `app/core/security.py` — `hash_password` and `verify_password`.
 
 Passwords are hashed with **Argon2id** through `argon2-cffi`, using the
@@ -382,9 +384,29 @@ root and is not versioned.
 | POST   | `/api/v1/auth/register` | `{email, password, full_name?}`      | `201` public user; `409` email taken; `422` invalid email or password    |
 | POST   | `/api/v1/auth/login`    | `{email, password}`                  | `200` `{access_token, token_type: "bearer"}` + `access_token` cookie; `401` |
 | POST   | `/api/v1/auth/logout`   | —                                    | `204`, clears the `access_token` cookie                                  |
+| GET    | `/api/v1/users/me`      | —                                    | `200` public user; `401`                                                 |
+| PATCH  | `/api/v1/users/me`      | `{full_name?}`                       | `200` public user; `401`; `422` unknown field or name over 255 chars     |
+| POST   | `/api/v1/users/me/password` | `{current_password, new_password}` | `200` `{access_token, token_type}` + new cookie; `400` wrong current password; `401`; `422` |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an
-untrusted origin (see Authentication below).
+untrusted origin (see Authentication below), and so do the `/users/me`
+endpoints when a cookie-authenticated `PATCH`/`POST` comes from one.
+
+### Profile endpoints
+
+- All `/api/v1/users/me` endpoints require authentication
+  (`get_current_user`) and only ever act on the authenticated user.
+- `PATCH` changes only `full_name` (trimmed; `null` or blank clears it; an
+  omitted field is left unchanged). Any other field — including `email`,
+  `is_admin` and `is_active` — is rejected with `422`.
+- The password change verifies `current_password` and applies the
+  registration rules to `new_password` (8 to 256 characters). It increments
+  the user's `token_version`, so every previously issued token (including the
+  one used for the request) stops working; the response contains a fresh
+  token and sets it as the cookie.
+- Responses use the public user schema, so the password hash, `is_admin` and
+  `token_version` are never returned; the email is the stored, normalized
+  (trimmed, lowercased) address.
 
 ## Authentication
 
@@ -410,6 +432,8 @@ untrusted origin (see Authentication below).
   header is absent, the cookie, and returns `401` for a missing, invalid or
   expired token, an unknown or inactive user, or a token whose `ver` no
   longer matches the user's `token_version`.
+- **Admins**: admin-only routes depend on `get_current_admin`, which returns
+  `401` like `get_current_user` and `403` for an authenticated non-admin.
 - **Logout does not revoke tokens.** JWTs are stateless: logout only clears
   the browser cookie, and a token copied before logout stays valid until it
   expires. Incrementing `users.token_version` (done automatically by a
@@ -466,7 +490,8 @@ endpoints and email templates):
 
 - No per-token revocation: logout does not invalidate an issued JWT (see
   above). Keep `ACCESS_TOKEN_EXPIRE_MINUTES` short.
-- There is no login rate limiting or account lockout yet, and the in-memory
+- There is no login or password-change rate limiting or account lockout
+  yet, and the in-memory
   rate limiter is per process and resets on restart; a shared limiter is part
   of the security hardening work (CF-042).
 - Registration returns `409` for a taken email, as required, which does

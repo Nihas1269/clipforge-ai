@@ -105,3 +105,14 @@ def get_current_user(
         logger.info("access_token_rejected", extra={"user_id": str(payload.user_id)})
         raise _unauthorized()
     return user
+
+
+def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    """Return the current user if they are an admin; 403 otherwise.
+
+    Unauthenticated requests still get 401 from get_current_user first.
+    """
+    if not user.is_admin:
+        logger.info("admin_access_denied", extra={"user_id": str(user.id)})
+        raise HTTPException(status_code=403, detail="Admin privileges required.")
+    return user

@@ -48,6 +48,36 @@ class UserCreate(BaseModel):
         return value.strip() or None
 
 
+class UserUpdate(BaseModel):
+    """Profile update body. Only `full_name` can be changed by the user.
+
+    Unknown fields (including `email`, `is_admin`, `is_active`) are rejected.
+    An omitted `full_name` leaves it unchanged; null or blank clears it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str | None = Field(default=None, max_length=FULL_NAME_MAX_LENGTH)
+
+    @field_validator("full_name", mode="after")
+    @classmethod
+    def _blank_full_name_is_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class PasswordChange(BaseModel):
+    """Password change body. The new password follows the registration rules."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(
+        min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
+
+
 class UserPublic(BaseModel):
     """A user as returned by the API. Never includes the password hash."""
 
