@@ -4,7 +4,7 @@ FastAPI backend for ClipForge AI.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.11 or newer
 
 ## Setup
 
@@ -789,14 +789,49 @@ The handlers live in `app/core/errors.py`:
 
 ## Running the tests
 
+`pytest` is included in `requirements.txt`, so the backend tests need no extra
+packages:
+
 ```bash
 pytest
 ```
 
-The tests use isolated SQLite databases (in memory, or a temporary file for
-the migration tests in `tests/test_migrations.py`) and do not require
+`tests/test_ci_workflow.py` also checks the CI workflow
+(`.github/workflows/ci.yml`): that it is valid YAML with read-only permissions,
+no secrets or deployment steps, SHA-pinned actions, and the required jobs. It
+needs only the runtime requirements; when `PyYAML` from `requirements-dev.txt`
+is installed, it also compares the result with a full YAML parser.
+
+The backend tests use isolated SQLite databases (in memory, or a temporary file
+for the migration tests in `tests/test_migrations.py`) and do not require
 PostgreSQL or `DATABASE_URL` to be set. Background job tests run Celery
 eagerly and mock broker publishing, so they need no Redis. The S3 storage tests use
 `botocore.stub.Stubber` and mocked clients, so they need no network access or
 S3 credentials. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).
+
+## Linting, formatting, and dependency audit
+
+Development tools (`ruff`, `pip-audit`, `cyclonedx-bom`, and `PyYAML` for the
+CI workflow tests) are listed in `requirements-dev.txt`, separately from the
+runtime requirements:
+
+```bash
+pip install -r requirements-dev.txt
+
+ruff check .
+ruff format --check .   # or `ruff format .` to apply formatting
+pip-audit -r requirements.txt
+```
+
+`requirements.txt` pins `dnspython>=2.9.2` (a transitive dependency of
+`email-validator`) to pick up the fixes for advisories reported by
+`pip-audit`. dnspython 2.9.x requires Python 3.11 or newer, which is why the
+backend no longer supports Python 3.10.
+
+## Continuous integration
+
+The `backend` job in `.github/workflows/ci.yml` runs these checks and
+`pytest` on Python 3.11 and 3.12 for every pull request and push to `main`,
+with FFmpeg (built with libass) installed. See the root `README.md` for all
+CI jobs.

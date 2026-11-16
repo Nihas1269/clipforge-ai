@@ -151,7 +151,11 @@ def test_database_rejects_uppercase_email(db):
                 "INSERT INTO users (id, email, hashed_password) "
                 "VALUES (:id, :email, :hashed_password)"
             ),
-            {"id": uuid.uuid4().hex, "email": "Alice@Example.com", "hashed_password": "x"},
+            {
+                "id": uuid.uuid4().hex,
+                "email": "Alice@Example.com",
+                "hashed_password": "x",
+            },
         )
 
 

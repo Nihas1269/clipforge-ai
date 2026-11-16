@@ -5,6 +5,7 @@ Revises: 0003
 Create Date: 2026-11-17
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -53,7 +54,9 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(length=255), nullable=True),
         sa.Column("active_key", sa.String(length=320), nullable=True),
         sa.Column("celery_task_id", sa.String(length=255), nullable=True),
-        sa.Column("attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column(
+            "attempts", sa.Integer(), server_default=sa.text("0"), nullable=False
+        ),
         sa.Column(
             "max_attempts", sa.Integer(), server_default=sa.text("1"), nullable=False
         ),

@@ -70,7 +70,9 @@ class ProcessingJob(Base):
 
     __tablename__ = "processing_jobs"
     __table_args__ = (
-        CheckConstraint("attempts >= 0", name="ck_processing_jobs_attempts_non_negative"),
+        CheckConstraint(
+            "attempts >= 0", name="ck_processing_jobs_attempts_non_negative"
+        ),
         CheckConstraint(
             "max_attempts >= 1", name="ck_processing_jobs_max_attempts_positive"
         ),
@@ -107,14 +109,18 @@ class ProcessingJob(Base):
         index=True,
     )
     # Identifies the operation, for example the video id for a metadata job.
-    idempotency_key: Mapped[str | None] = mapped_column(String(IDEMPOTENCY_KEY_MAX_LENGTH))
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(IDEMPOTENCY_KEY_MAX_LENGTH)
+    )
     # "<job_type>:<idempotency_key>" while the job is queued or running, NULL
     # once it has finished. The unique index allows only one active job per
     # operation.
     active_key: Mapped[str | None] = mapped_column(
         String(ACTIVE_KEY_MAX_LENGTH), unique=True, index=True
     )
-    celery_task_id: Mapped[str | None] = mapped_column(String(CELERY_TASK_ID_MAX_LENGTH))
+    celery_task_id: Mapped[str | None] = mapped_column(
+        String(CELERY_TASK_ID_MAX_LENGTH)
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     max_attempts: Mapped[int] = mapped_column(
         Integer, default=1, server_default=text("1")
@@ -135,5 +141,7 @@ class ProcessingJob(Base):
 
     def __repr__(self) -> str:
         # No payload: it can contain user content.
-        status = self.status.value if isinstance(self.status, JobStatus) else self.status
+        status = (
+            self.status.value if isinstance(self.status, JobStatus) else self.status
+        )
         return f"ProcessingJob(id={self.id!r}, status={status!r})"

@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-11-16
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -23,12 +24,8 @@ def upgrade() -> None:
         sa.Column("email", sa.String(length=320), nullable=False),
         sa.Column("hashed_password", sa.String(length=255), nullable=False),
         sa.Column("full_name", sa.String(length=255), nullable=True),
-        sa.Column(
-            "is_active", sa.Boolean(), server_default=sa.true(), nullable=False
-        ),
-        sa.Column(
-            "is_admin", sa.Boolean(), server_default=sa.false(), nullable=False
-        ),
+        sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
+        sa.Column("is_admin", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

@@ -217,7 +217,9 @@ async def _parse_upload_form(request: Request, user: User, max_bytes: int) -> Fo
     media_type = normalize_content_type(request_content_type)
     if media_type != "multipart/form-data":
         raise _unsupported(
-            user, "invalid_request_content_type", "The request must be multipart/form-data."
+            user,
+            "invalid_request_content_type",
+            "The request must be multipart/form-data.",
         )
     # Older Starlette versions raise KeyError (a 500) when the boundary is
     # missing, so reject it here.
@@ -248,7 +250,9 @@ async def _parse_upload_form(request: Request, user: User, max_bytes: int) -> Fo
             spooled.close()
         logger.info("video_upload_interrupted", extra={"user_id": str(user.id)})
         raise AppError(
-            status.HTTP_400_BAD_REQUEST, "upload_interrupted", "The upload was interrupted."
+            status.HTTP_400_BAD_REQUEST,
+            "upload_interrupted",
+            "The upload was interrupted.",
         ) from None
     except MultiPartException:
         raise _reject(
@@ -284,7 +288,10 @@ def _store_upload(
 
     if declared_type not in settings.ALLOWED_VIDEO_CONTENT_TYPES:
         raise _unsupported(
-            user, "unsupported_content_type", "This content type is not supported.", **types
+            user,
+            "unsupported_content_type",
+            "This content type is not supported.",
+            **types,
         )
     if CONTENT_TYPE_CONTAINERS.get(declared_type) != expected_container:
         raise _unsupported(
@@ -301,7 +308,9 @@ def _store_upload(
     fileobj.seek(0)
     header = fileobj.read(SNIFF_BYTES)
     if not header:
-        raise _reject(user, 422, "empty_file", "The file is empty.", size_bytes=0, **types)
+        raise _reject(
+            user, 422, "empty_file", "The file is empty.", size_bytes=0, **types
+        )
     if detect_container(header) != expected_container:
         raise _unsupported(
             user,
@@ -317,7 +326,9 @@ def _store_upload(
         key = video_source_key(str(user.id), str(video_id), ext)
     except InvalidStorageKeyError:
         # Nothing has been stored yet, so there is nothing to clean up.
-        logger.exception("video_upload_storage_key_invalid", extra={"user_id": str(user.id)})
+        logger.exception(
+            "video_upload_storage_key_invalid", extra={"user_id": str(user.id)}
+        )
         raise AppError(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "upload_failed",

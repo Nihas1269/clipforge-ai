@@ -1,0 +1,227 @@
+# Continuous integration: tests and static checks only.
+#
+# This workflow validates code. It never deploys, publishes, or merges, and it
+# uses no repository secrets: the only token is the default, read-only
+# GITHUB_TOKEN (passed to zizmor so it can verify the pinned action commits).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels its older run. Each push to main gets
+# its own group (keyed by run id), so those runs are never cancelled or
+# replaced while queued, and every commit on main gets a complete result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      # The Ubuntu ffmpeg package is built with libass, which the
+      # subtitle-rendering (subtitles/ass filter) integration tests need.
+      - name: Install FFmpeg with libass
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+
+      - name: Verify FFmpeg subtitle support
+        run: |
+          ffmpeg -hide_banner -version
+          ffmpeg -hide_banner -buildconf | grep -- "--enable-libass"
+          ffmpeg -hide_banner -filters | grep -w "subtitles"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff check)
+        run: ruff check .
+
+      - name: Check formatting (ruff format)
+        run: ruff format --check .
+
+      - name: Run tests (pytest)
+        run: python -m pytest
+
+      - name: Audit runtime dependencies (pip-audit)
+        run: pip-audit -r requirements.txt
+
+      # The SBOM lists only the runtime dependencies, installed into a clean
+      # virtual environment. It is generated once, not per matrix entry.
+      - name: Generate backend SBOM (CycloneDX)
+        if: matrix.python-version == '3.12'
+        run: |
+          python -m venv "$RUNNER_TEMP/sbom-venv"
+          "$RUNNER_TEMP/sbom-venv/bin/python" -m pip install -r requirements.txt
+          mkdir -p "$RUNNER_TEMP/sbom"
+          cyclonedx-py environment \
+            --output-format JSON \
+            --output-file "$RUNNER_TEMP/sbom/backend.cdx.json" \
+            "$RUNNER_TEMP/sbom-venv/bin/python"
+
+      - name: Upload backend SBOM
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-backend
+          path: ${{ runner.temp }}/sbom/backend.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      # The Node version (24, an LTS line) is defined once in frontend/.nvmrc
+      # and shared with local development.
+      - name: Set up Node.js LTS
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit dependencies (npm audit)
+        run: npm audit --audit-level=high
+
+      - name: Generate frontend SBOM (CycloneDX)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          npm sbom --sbom-format cyclonedx --omit dev > "$RUNNER_TEMP/sbom/frontend.cdx.json"
+
+      - name: Upload frontend SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-frontend
+          path: ${{ runner.temp }}/sbom/frontend.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  security:
+    name: security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Full history so gitleaks scans every commit, not only the latest one.
+      - name: Check out repository (full history)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          # Latest supported Go release; only used to build the pinned tools.
+          go-version: stable
+          cache: false
+
+      # Installed from source at a pinned version; the Go checksum database
+      # verifies the downloaded module.
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.28.0
+
+      # --redact keeps any detected secret value out of the job log.
+      - name: Scan full Git history for secrets (gitleaks)
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" git \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --verbose \
+            .
+
+  workflow-lint:
+    name: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      # Without file arguments, actionlint checks every workflow in
+      # .github/workflows/.
+      - name: Lint workflows (actionlint)
+        run: '"$(go env GOPATH)/bin/actionlint" -color'
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install zizmor
+        run: python -m pip install "zizmor>=1.5,<2"
+
+      # The read-only default token enables zizmor's online audits, which
+      # check that each pinned commit really belongs to the named action.
+      - name: Audit workflows (zizmor)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor .github/workflows/
