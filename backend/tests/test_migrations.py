@@ -287,6 +287,106 @@ def test_downgrade_of_videos_migration_keeps_users(database_url, engine):
     assert "users" in table_names
 
 
+def test_upgrade_creates_processing_jobs_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]: column for column in inspector.get_columns("processing_jobs")
+    }
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "video_id",
+        "job_type",
+        "status",
+        "idempotency_key",
+        "active_key",
+        "celery_task_id",
+        "attempts",
+        "max_attempts",
+        "error_message",
+        "payload",
+        "request_id",
+        "created_at",
+        "started_at",
+        "finished_at",
+    }
+    for name in ("job_type", "status", "attempts", "max_attempts", "created_at"):
+        assert columns[name]["nullable"] is False, name
+    for name in (
+        "user_id",
+        "video_id",
+        "celery_task_id",
+        "error_message",
+        "payload",
+        "started_at",
+        "finished_at",
+    ):
+        assert columns[name]["nullable"] is True, name
+
+    indexes = {
+        index["name"]: index for index in inspector.get_indexes("processing_jobs")
+    }
+    assert indexes["ix_processing_jobs_active_key"]["unique"]
+    assert not indexes["ix_processing_jobs_user_id"]["unique"]
+    referred = {fk["referred_table"] for fk in inspector.get_foreign_keys("processing_jobs")}
+    assert referred == {"users", "videos"}
+
+
+def test_migrated_processing_jobs_table_enforces_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    insert_job = text(
+        "INSERT INTO processing_jobs (id, job_type, status, active_key) "
+        "VALUES (:id, :job_type, :status, :active_key)"
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO processing_jobs (id, job_type) VALUES (:id, 'metadata')"),
+            {"id": uuid.uuid4().hex},
+        )
+        row = connection.execute(
+            text("SELECT status, attempts, max_attempts, created_at FROM processing_jobs")
+        ).one()
+    assert row.status == "queued"
+    assert row.attempts == 0
+    assert row.max_attempts == 1
+    assert row.created_at is not None
+
+    invalid_rows = [
+        {"job_type": "thumbnail", "status": "queued", "active_key": None},
+        {"job_type": "render", "status": "paused", "active_key": None},
+    ]
+    for values in invalid_rows:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(insert_job, {"id": uuid.uuid4().hex, **values})
+
+    # Only one active job per operation.
+    with engine.begin() as connection:
+        connection.execute(
+            insert_job,
+            {"id": uuid.uuid4().hex, "job_type": "render", "status": "queued", "active_key": "render:k"},
+        )
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                insert_job,
+                {"id": uuid.uuid4().hex, "job_type": "render", "status": "queued", "active_key": "render:k"},
+            )
+
+
+def test_downgrade_of_processing_jobs_migration_keeps_auth_tokens(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0003")
+
+    table_names = inspect(engine).get_table_names()
+    assert "processing_jobs" not in table_names
+    assert "auth_tokens" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import API_V1_PREFIX, api_router
 from app.core.config import Settings, get_settings, sanitize_cors_origins
 from app.core.errors import register_exception_handlers
+from app.core.request_id import RequestIDMiddleware
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,6 +26,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Added last so it is the outermost middleware and every response,
+    # including CORS preflight responses, carries the request ID.
+    app.add_middleware(RequestIDMiddleware)
     register_exception_handlers(app)
 
     @app.get("/health")

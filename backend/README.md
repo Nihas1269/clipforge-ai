@@ -63,7 +63,7 @@ Copy-Item .env.example .env
 | `APP_ENV`                     | `development`            | `development`, `test`, or `production`.                      |
 | `APP_NAME`                    | `ClipForge AI`           | Application name, used as the API title.                     |
 | `DATABASE_URL`                | unset                    | PostgreSQL connection string (see below).                    |
-| `REDIS_URL`                   | unset                    | Optional Redis connection string.                            |
+| `REDIS_URL`                   | unset                    | Redis URL: Celery broker and result backend (see Background jobs). |
 | `SECRET_KEY`                  | development-only default | Secret for signing tokens. Required in production.           |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30`                     | Access token lifetime in minutes (must be positive).         |
 | `EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES` | `1440`       | Email verification token lifetime in minutes (positive).     |
@@ -346,6 +346,120 @@ Limitation: `transition_status` checks the status held in memory, so two
 workers changing the same video concurrently can both succeed; callers that
 need this guarantee must lock the row (for example `SELECT ... FOR UPDATE`).
 
+## Background jobs
+
+Long-running work (metadata extraction, transcription, clip detection,
+rendering) runs in a [Celery](https://docs.celeryq.dev/) worker with Redis
+(`REDIS_URL`) as broker and result backend. Every job also has a
+`ProcessingJob` row (`processing_jobs` table, migration `0004`), which is the
+source of truth for its status.
+
+Run the worker (and, for stale-job recovery, the scheduler) from the
+`backend/` directory with the same settings as the API (`DATABASE_URL`,
+`REDIS_URL`):
+
+```bash
+celery -A app.worker.celery_app worker --loglevel=INFO
+celery -A app.worker.celery_app beat --loglevel=INFO
+```
+
+With `APP_ENV=test`, tasks run eagerly in the calling process
+(`task_always_eager`), so the tests need no Redis.
+
+### Job model
+
+- `job_type`: `metadata`, `transcription`, `clip_detection` or `render`.
+- `status`: `queued` → `running` → `succeeded` or `failed`; a retryable
+  failure goes back to `queued`; queued and running jobs can be `cancelled`.
+  A failed job is never reported as succeeded.
+- `user_id` / `video_id` (nullable, `ON DELETE CASCADE`), `payload` (a JSON
+  object of at most 16 KiB), `celery_task_id`, `attempts` / `max_attempts`,
+  `idempotency_key`, `request_id`, `error_message`.
+- `created_at` (queued), `started_at` (latest attempt) and `finished_at`, so
+  queue wait (`started_at - created_at`) and run time
+  (`finished_at - started_at`) can be measured per job type. Both are also
+  logged as `queue_wait_ms` and `duration_ms`.
+
+### Writing and queuing jobs (`app/worker/jobs.py`)
+
+```python
+from app.models.processing_job import JobType
+from app.worker.jobs import JobContext, JobError, RetryableJobError, enqueue_job, job_task
+
+
+@job_task(JobType.METADATA, max_attempts=3, soft_time_limit=600, time_limit=660)
+def extract_metadata(ctx: JobContext) -> None:
+    video_id = ctx.payload["video_id"]
+    ...  # raise JobError("...") or RetryableJobError("...") on failure
+
+
+job = enqueue_job(
+    JobType.METADATA,
+    extract_metadata,
+    db=db,
+    user_id=user.id,
+    video_id=video.id,
+    payload={"video_id": str(video.id)},
+    idempotency_key=str(video.id),
+)
+```
+
+- `enqueue_job` validates the job type, task and payload, commits the job
+  row (with its Celery task id) **before** publishing, then publishes. If
+  publishing fails (Redis down, or `REDIS_URL` unset) the job is marked
+  `failed` with "The job could not be queued. Try again later." and
+  `JobDispatchError` is raised; it is never left queued.
+- **Idempotency**: while a job with the same type and `idempotency_key` is
+  queued or running, `enqueue_job` returns that job instead of creating
+  another (enforced by a unique index on `active_key`, which is cleared when
+  the job finishes).
+- **State changes are atomic**: each transition is a conditional `UPDATE`
+  (`WHERE id = ... AND status = ...`). A worker only runs a job it moved from
+  `queued` to `running`, so a duplicate or late message (for example for a
+  cancelled or finished job) does nothing.
+- **Errors**: `error_message` holds the message of a `JobError` (credentials
+  in URLs and control characters removed, truncated to 500 characters), "The
+  job timed out." for a soft time limit, or "The job failed unexpectedly
+  (ExceptionType)." for any other exception. Exception text and stack traces
+  are never stored.
+- **Timeouts**: every job task has a soft time limit (default 600 s, raises
+  inside the task and fails the job) and a hard time limit (default 660 s,
+  at most 3600 s, kills the worker process).
+- **Retries**: only `RetryableJobError` is retried, until `max_attempts`
+  (default 3, at most 10) attempts were made, after
+  `10 s * 2^(attempt - 1)` (capped at 600 s, no jitter). Each attempt
+  increments `attempts`. Retries run the same function with the same payload,
+  so tasks must write their results idempotently (keyed by job or operation,
+  overwritten rather than appended). If a retry cannot be published the job
+  fails.
+- **Cancellation**: `cancel_job(db, job_id, user_id=...)` cancels a queued or
+  running job owned by that user. A queued job is skipped when its message
+  arrives; a running task is not interrupted, but its result is discarded and
+  it can stop early by checking `ctx.is_cancelled()`.
+- **Lost workers**: tasks are acknowledged late (`task_acks_late`). A job
+  still `running` more than 65 minutes (the maximum hard time limit plus 5
+  minutes) after it started is marked `failed` ("The job was interrupted ...")
+  by `fail_stale_jobs`, which runs when a worker starts and every 5 minutes
+  through Celery beat.
+- **Request IDs**: every API request gets an `X-Request-ID` (the client's
+  value if it is 1-64 characters of `A-Z a-z 0-9 . _ -`, otherwise a random
+  one), returned in the response header. `enqueue_job` stores it on the job,
+  and the job's log events (`job_queued`, `job_started`, `job_succeeded`,
+  `job_failed`, `job_retry_scheduled`, ...) carry `job_id`, `job_type`,
+  `request_id` and `attempt`, never the payload or exception text.
+- Broker connections and Redis sockets time out after 5 s; publishing is
+  retried at most 3 times.
+
+`GET /api/v1/jobs/{id}` returns a job's status to its owner (see Endpoints).
+
+Limitations: Celery itself logs task exceptions (including their text) in
+the worker log, so keep secrets out of exception messages and protect worker
+logs. A queued job whose message is lost inside Redis (for example after
+Redis data loss) stays queued; there is no automatic re-publishing. Stale
+running jobs are failed, not retried. A running task is not forcibly stopped
+on cancellation. No API endpoint queues or cancels jobs yet; processing
+features add them.
+
 ## Running the server
 
 ```bash
@@ -399,6 +513,7 @@ root and is not versioned.
 | POST   | `/api/v1/auth/verify-email/confirm` | `{token}`                | `200` `{message}`; `400` `invalid_token`; `422`; `429`                   |
 | POST   | `/api/v1/auth/password-reset/request` | `{email}`              | `202` `{message}` (always the same); `422`; `429`; `503` email not configured |
 | POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
+| GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an
 untrusted origin (see Authentication below), and so do the `/users/me`
@@ -622,7 +737,8 @@ pytest
 
 The tests use isolated SQLite databases (in memory, or a temporary file for
 the migration tests in `tests/test_migrations.py`) and do not require
-PostgreSQL or `DATABASE_URL` to be set. The S3 storage tests use
+PostgreSQL or `DATABASE_URL` to be set. Background job tests run Celery
+eagerly and mock broker publishing, so they need no Redis. The S3 storage tests use
 `botocore.stub.Stubber` and mocked clients, so they need no network access or
 S3 credentials. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).
