@@ -69,7 +69,9 @@ Copy-Item .env.example .env
 | `EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES` | `1440`       | Email verification token lifetime in minutes (positive).     |
 | `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | `30`             | Password reset token lifetime in minutes (positive).         |
 | `CORS_ORIGINS`                | empty                    | Comma-separated list of allowed origins (see below).         |
-| `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (must be positive).         |
+| `MAX_UPLOAD_SIZE_MB`          | `500`                    | Maximum upload size in megabytes (MiB, must be positive).    |
+| `ALLOWED_VIDEO_EXTENSIONS`    | `.mp4,.mov,.webm,.mkv`   | Comma-separated upload extensions (see Video upload below).  |
+| `ALLOWED_VIDEO_CONTENT_TYPES` | `video/mp4,video/quicktime,video/webm,video/x-matroska` | Comma-separated declared content types accepted for uploads. |
 | `STORAGE_BACKEND`             | `local`                  | `local` or `s3` (see Storage below).                         |
 | `LOCAL_STORAGE_DIR`           | `backend/storage`        | Root directory of the local storage backend.                 |
 | `S3_ENDPOINT_URL`             | unset                    | S3 API URL for R2/MinIO; leave unset for AWS S3.             |
@@ -346,6 +348,61 @@ Limitation: `transition_status` checks the status held in memory, so two
 workers changing the same video concurrently can both succeed; callers that
 need this guarantee must lock the row (for example `SELECT ... FOR UPDATE`).
 
+## Video upload
+
+`POST /api/v1/videos` (`app/api/v1/videos.py`) uploads a long-form video for
+the authenticated user. It requires authentication (`get_current_user`,
+including the CSRF check for cookie-authenticated requests), and the
+credentials are checked before any of the request body is read.
+
+- **Request**: `multipart/form-data` with exactly one file part named
+  `file` and no other fields.
+- **Size**: a `Content-Length` above `MAX_UPLOAD_SIZE_MB` (plus 64 KiB for
+  the multipart framing) is rejected with `413` before the body is read;
+  otherwise reading stops with `413` as soon as the streamed body passes that
+  limit, and the file itself is held to the exact limit when it is written to
+  storage. The file part is spooled to a temporary file (at most 1 MiB in
+  memory), so an upload is never loaded into memory in full. Empty files are
+  rejected with `422`.
+- **Type**: the extension must be in `ALLOWED_VIDEO_EXTENSIONS`, the declared
+  content type in `ALLOWED_VIDEO_CONTENT_TYPES`, and both must belong to the
+  same container family as the file's first bytes: an ISO BMFF `ftyp` box
+  for `.mp4`/`.mov`, the EBML header (`1A 45 DF A3`) for `.webm`/`.mkv`.
+  Anything else is `415`. The stored `content_type` is derived from the
+  validated extension, never copied from the client. This is format
+  validation, not malware scanning. Helpers live in
+  `app/services/video_upload.py`.
+- **File name**: `original_filename` is sanitized for display only:
+  directory components (`/` and `\`), control and formatting characters and
+  surrounding whitespace are removed and it is limited to 255 characters,
+  keeping the extension. It is never used in a storage key, a path or a
+  command.
+- **Storage**: the file is streamed to storage under
+  `video_source_key(user_id, video_id, ext)` with a newly generated video id,
+  and a `Video` row is created with status `uploaded`; the response is
+  `201` with `VideoRead`. Processing is not started (CF-018 adds that).
+- **Cleanup**: if writing to storage or committing the row fails, the stored
+  object is deleted and `500 upload_failed` is returned. Oversized or invalid
+  uploads never reach storage, and an interrupted request ends with `400
+  upload_interrupted` before anything is stored; the temporary files spooled
+  so far are closed (and so deleted) straight away. A misconfigured storage
+  backend returns `503`.
+- **Logging**: `video_uploaded` (user id, video id, size, content type) and
+  `video_upload_rejected` (user id, reason, size, extension and declared
+  content type when known). An extension or content type that is not a
+  recognized video type is logged as `other`. File names and contents are
+  never logged.
+
+Limitations: no resumable or chunked uploads; the whole file is first
+spooled to a temporary file on the API server's disk and then copied to
+storage, so the server needs free temporary space of up to
+`MAX_UPLOAD_SIZE_MB` per concurrent upload. Only the first bytes are checked,
+so a file with a valid header but corrupt contents is accepted (probing in
+CF-018 will catch it). Older QuickTime files that do not start with an
+`ftyp` box are rejected. If deleting a stored
+object fails during cleanup, the failure is logged
+(`video_upload_cleanup_failed`) and the object is left behind.
+
 ## Background jobs
 
 Long-running work (metadata extraction, transcription, clip detection,
@@ -513,6 +570,7 @@ root and is not versioned.
 | POST   | `/api/v1/auth/verify-email/confirm` | `{token}`                | `200` `{message}`; `400` `invalid_token`; `422`; `429`                   |
 | POST   | `/api/v1/auth/password-reset/request` | `{email}`              | `202` `{message}` (always the same); `422`; `429`; `503` email not configured |
 | POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
+| POST   | `/api/v1/videos`        | multipart, one file part `file`      | `201` `VideoRead`; `400` malformed multipart; `401`; `413` too large; `415` type not allowed or mismatched; `422` missing or empty file; `500`/`503` storage or database failure |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an
