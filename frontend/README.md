@@ -78,6 +78,28 @@ Opens the app at <http://localhost:3000>.
 | `npm run test:watch`| Runs Vitest in watch mode.                         |
 | `npm run build`     | Creates a production build in `.next/`.            |
 | `npm start`         | Serves the production build (run `build` first).   |
+| `npm audit --audit-level=high` | Fails on any high or critical dependency vulnerability. |
+
+## Dependency security
+
+The frontend uses Next.js 16, Vitest 5 and the flat ESLint configs shipped by
+`eslint-config-next` 16. `npm audit --audit-level=high` must report no high or
+critical vulnerabilities. When upgrading a dependency, keep the related
+packages together (`next` with `eslint-config-next`; `react` with
+`@types/react`). `@vitejs/plugin-react` 5.2 accepts Vite 4 to 8 as a peer, so
+it works with the Vite version that Vitest 5 installs. Check its `vite` peer
+range before moving it to a new major. Next.js 16 requires Node.js 20.9 or
+newer, so the pinned Node.js 24 LTS is compatible.
+
+Known remaining moderate vulnerabilities: none. `npm audit` reports
+`found 0 vulnerabilities` (at any severity) for the current
+`package-lock.json`. If a later audit reports a moderate vulnerability that has
+no compatible fix, list it here with the reason it cannot be fixed yet.
+
+Tests run with Vitest `globals: true` so that React Testing Library registers
+its automatic `cleanup` after each test. Under Vitest 5, an `afterEach` call at
+the top level of `vitest.setup.ts` fails with "Vitest failed to find the
+current suite", so the setup file does not register hooks itself.
 
 ## Project structure
 

@@ -1,9 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
 
-// Vitest globals are disabled, so Testing Library cannot register its
-// automatic cleanup; unmount rendered trees between tests explicitly.
-afterEach(() => {
-  cleanup();
-});
+// Rendered trees are unmounted between tests by React Testing Library's
+// automatic cleanup, which it registers with the global `afterEach` (enabled
+// by `globals: true` in vitest.config.mts) when a test file imports it.
+// Do not import "@testing-library/react" here: it would then register that hook
+// from the setup file, which fails under Vitest 5 ("failed to find the current
+// suite").
