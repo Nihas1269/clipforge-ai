@@ -28,6 +28,13 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Optional: to use the local Whisper transcription provider, also install the
+machine-learning extras (large; not needed for development or the tests):
+
+```bash
+pip install -r requirements-ml.txt
+```
+
 ## Configuration
 
 All backend settings are defined in one typed module,
@@ -94,7 +101,13 @@ Copy-Item .env.example .env
 | `FFPROBE_TIMEOUT_SECONDS`     | `60`                     | Wall-clock limit of one ffprobe run (at most 600).           |
 | `FFMPEG_MAX_MEMORY_MB`        | `8192`                   | Virtual memory limit of FFmpeg processes (Linux/macOS only). |
 | `FFMPEG_MAX_OUTPUT_FILE_MB`   | `2048`                   | Largest file an FFmpeg process may write (Linux/macOS only). |
-| `TRANSCRIPTION_PROVIDER`      | `fake`                   | Speech-to-text provider (see Transcripts below); `fake` is refused in production. |
+| `TRANSCRIPTION_PROVIDER`      | `fake`                   | `fake`, `openai_compatible` or `local_whisper` (see Transcripts below); `fake` is refused in production. |
+| `TRANSCRIPTION_API_BASE_URL`  | unset                    | OpenAI-compatible API base URL. Required for `openai_compatible`. |
+| `TRANSCRIPTION_API_KEY`       | unset                    | API key. Required for `openai_compatible` unless the URL is a loopback host. |
+| `TRANSCRIPTION_MODEL`         | unset                    | Remote model name, or Whisper model size/directory. Required for both real providers. |
+| `TRANSCRIPTION_TIMEOUT_SECONDS` | `300`                  | Wall-clock limit of one transcription request (at most 1800). |
+| `TRANSCRIPTION_MAX_UPLOAD_MB` | `24`                     | Largest file sent in one request; larger audio is chunked.   |
+| `TRANSCRIPTION_CHUNK_SECONDS` | `600`                    | Longest chunk (30-3600 s), further limited by the upload size. |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -403,11 +416,99 @@ so non-Latin scripts and code-switched text keep their original form.
   size) and returns 5-second segments covering it, with placeholder text and
   evenly spaced word timings. The same file always gives the same result;
   an empty or silent (< 1 ms) file gives zero segments.
+- `openai_compatible.py` — `OpenAICompatibleTranscriptionProvider`, which
+  posts the audio to `<TRANSCRIPTION_API_BASE_URL>/audio/transcriptions`
+  (multipart, `model`, `response_format=verbose_json`,
+  `timestamp_granularities[]=segment` and `word`, and `language` when one
+  was requested) with `Authorization: Bearer <TRANSCRIPTION_API_KEY>`.
+  See "Real transcription providers" below.
+- `local_whisper.py` — `LocalWhisperTranscriptionProvider`, which runs
+  [faster-whisper](https://github.com/SYSTRAN/faster-whisper) in the worker
+  process with word timestamps.
+- `mapping.py` — shared helpers that validate provider output, map Whisper
+  language names (`english`) to ISO codes (`en`), and place timestamps on
+  the timeline of the whole file.
 - `get_transcription_provider()` (in `app/transcription/__init__.py`)
   returns the provider named by `TRANSCRIPTION_PROVIDER` (default `fake`).
   An unknown name does not stop the app from starting but raises
   `TranscriptionConfigurationError` when transcription is used; so does
-  `fake` when `APP_ENV=production`.
+  `fake` when `APP_ENV=production`, a real provider whose required settings
+  are missing or invalid (the message names every missing setting, never a
+  value), and `local_whisper` when faster-whisper is not installed.
+
+### Real transcription providers
+
+Both are optional; development and the tests use `fake` and need no account,
+key or ML package. Setup steps are in `docs/setup/transcription.md`.
+Example configuration (placeholders only; put real values in `backend/.env`
+or the deployment environment, never in committed files):
+
+```bash
+# A hosted OpenAI-compatible API
+TRANSCRIPTION_PROVIDER=openai_compatible
+TRANSCRIPTION_API_BASE_URL=<your-transcription-api-base-url>
+TRANSCRIPTION_API_KEY=<your-transcription-api-key>
+TRANSCRIPTION_MODEL=<your-transcription-model>
+
+# Local Whisper (after pip install -r requirements-ml.txt)
+TRANSCRIPTION_PROVIDER=local_whisper
+TRANSCRIPTION_MODEL=small
+```
+
+| | `openai_compatible` | `local_whisper` |
+| --- | --- | --- |
+| Install | nothing extra (`httpx` is a base dependency) | `requirements-ml.txt` (faster-whisper, CTranslate2; hundreds of MB) plus model files |
+| Account / key | yes, for a hosted API | none |
+| Privacy | audio is sent to the provider | audio never leaves the worker (the model may be downloaded on first use) |
+| Speed / resources | provider's hardware; per-minute pricing and rate limits | worker CPU/GPU and memory; slow on CPU for large models |
+| Limits | upload size (chunked here), timeouts, rate limits | none besides the job time limit |
+
+**openai_compatible details.**
+
+- `TRANSCRIPTION_API_BASE_URL` must be `https://`; `http://` is accepted only
+  for a loopback host (`localhost`, `127.0.0.1`, `::1`), e.g. a self-hosted
+  Whisper server, for which `TRANSCRIPTION_API_KEY` may also be left unset.
+  URLs with credentials, a query or a fragment are rejected. Redirects are
+  not followed, so the key is only ever sent to the configured host.
+- Requests have a `TRANSCRIPTION_TIMEOUT_SECONDS` timeout (10 s to connect).
+  They are not retried by the provider; errors raise
+  `TranscriptionProviderError` with `status_code`, `retryable` and
+  `retry_after`: `401`/`403` (bad key), `413` and other `4xx` are not
+  retryable; `429` (with `Retry-After`), `408`, `5xx`, network errors and
+  timeouts (`TranscriptionTimeoutError`) are. Response bodies are never
+  included in errors or logs.
+- **Chunking.** The duration is read with ffprobe first. A file larger than
+  `TRANSCRIPTION_MAX_UPLOAD_MB` is cut with FFmpeg into consecutive,
+  non-overlapping chunks of mono 16 kHz WAV (`-ss <offset> -t <duration>`).
+  A chunk lasts at most `TRANSCRIPTION_CHUNK_SECONDS`, and at most as long as
+  fits in the upload limit (32,000 bytes per second plus a header margin);
+  a last piece under 1 second is merged into the previous chunk. Each
+  chunk's timestamps are checked against that chunk and then shifted by the
+  chunk's start exactly once. A chunk that still exceeds the limit fails
+  the transcription with a clear error. Chunks live in a temporary
+  directory that is deleted afterwards, on success and on failure, and each
+  chunk file is deleted as soon as it has been sent.
+- **Validation.** Responses must be JSON objects with numeric, finite,
+  non-negative times and string texts; anything else raises
+  `InvalidTranscriptionResultError`. A segment or word may end up to 1
+  second past the end of its audio (it is clamped); more is rejected.
+  Transcript-level words (OpenAI) are attached to the segment containing
+  their midpoint; words are clamped into their segment. A response with text
+  but no segments becomes one segment covering the audio. The final result
+  is checked against the file's duration.
+- The detected language is mapped to an ISO 639 code; a requested language
+  is sent as its primary subtag (`hi-IN` → `hi`) and reported as requested.
+- Logs: `transcription_completed` (provider, model, language, segment and
+  chunk counts, duration) and `transcription_request_failed` (chunk index,
+  status, retryable, reason). Never the key, the audio, or transcript text.
+
+**local_whisper details.** faster-whisper is imported only when the provider
+is created and the model is loaded on the first transcription (then reused).
+Without the package, `get_transcription_provider()` raises
+`TranscriptionConfigurationError` naming `requirements-ml.txt`. It runs with
+`device="auto"` and `compute_type="default"`; its timestamps get the same
+validation as the remote provider, using the duration faster-whisper
+reports. Exceptions from the library are reported only by type.
 
 `app/repositories/transcripts.py` provides `get_transcript_for_video` and
 `replace_transcript(db, video_id, result, requested_language=None)`, which
@@ -416,11 +517,19 @@ retried job never creates duplicates. It flushes but does not commit, and
 logs `transcript_saved` (ids, provider, language, segment count; never the
 text).
 
-Limitations: only the fake provider exists, so `TRANSCRIPTION_PROVIDER` has
-no production value yet. No claims are made about transcription quality for
-regional languages (Telugu, Hindi, Tamil, Kannada, Malayalam); the tests
-cover storage of their scripts, not recognition. Segments may overlap if a
-provider reports them that way; only their start times must be in order.
+Limitations: the real providers are tested only with mocks
+(`httpx.MockTransport` and a fake Whisper model), never against a real
+service or model. Chunks do not
+overlap, so a word spoken across a chunk boundary may be cut or split; the
+language detected for the first chunk is reported for the whole file.
+Chunking needs FFmpeg/ffprobe on the worker (the duration is always probed
+with ffprobe). `http://` is accepted only for loopback hosts, so a
+self-hosted server on another machine or container needs HTTPS. The local
+Whisper device and compute type are not configurable yet. No claims are made
+about transcription quality for regional languages (Telugu, Hindi, Tamil,
+Kannada, Malayalam); the tests cover storage of their scripts, not
+recognition. Segments may overlap if a provider reports them that way; only
+their start times must be in order.
 
 ### Transcription jobs
 
@@ -508,10 +617,11 @@ the times to map between versions).
 
 Limitations: search is a substring match over the stored segment texts (no
 stemming or ranking) done in the API process, which is fine for the
-transcript sizes the duration limit allows. The provider call has no
-timeout of its own beyond the job's time limits; real providers must set
-their own request timeouts. A cancelled job's result can still be saved if
-the cancellation arrives after the final cancellation check.
+transcript sizes the duration limit allows. The `openai_compatible`
+provider limits each request with `TRANSCRIPTION_TIMEOUT_SECONDS`; the
+`local_whisper` provider has no timeout of its own beyond the job's time
+limits. A cancelled job's result can still be saved if the cancellation
+arrives after the final cancellation check.
 
 ## Video upload
 
@@ -1120,7 +1230,9 @@ eagerly and mock broker publishing, so they need no Redis. The S3 storage tests 
 S3 credentials. The FFmpeg tests generate a 2-second test video at runtime
 with `ffmpeg -f lavfi` (no media files are committed); tests that need the
 real `ffmpeg`/`ffprobe` binaries are skipped, with the reason shown by
-`pytest -rs`, when they are not installed. They ignore `backend/.env` and clear the
+`pytest -rs`, when they are not installed. The transcription provider tests
+use `httpx.MockTransport` and fakes, so they need no network, API key or
+faster-whisper. They ignore `backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).
 
 ## Linting, formatting, and dependency audit

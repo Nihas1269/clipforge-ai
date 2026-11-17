@@ -189,12 +189,38 @@ class Settings(BaseSettings):
     # raises a clear error when transcription is first used. "fake" returns
     # deterministic placeholder text and is refused in production.
     TRANSCRIPTION_PROVIDER: str = "fake"
+    # Real providers (see backend/README.md and docs/setup/transcription.md).
+    # Optional here so the app starts without them; the provider factory
+    # names the missing values. TRANSCRIPTION_MODEL is the remote model name
+    # for "openai_compatible" and the model size or path for "local_whisper".
+    TRANSCRIPTION_API_BASE_URL: str | None = None
+    TRANSCRIPTION_API_KEY: SecretStr | None = None
+    TRANSCRIPTION_MODEL: str | None = None
+    # Wall-clock limit of one request to a remote provider.
+    TRANSCRIPTION_TIMEOUT_SECONDS: float = Field(default=300.0, gt=0, le=1800)
+    # Largest file sent to a remote provider in one request; larger audio is
+    # split into consecutive chunks of at most TRANSCRIPTION_CHUNK_SECONDS.
+    TRANSCRIPTION_MAX_UPLOAD_MB: int = Field(default=24, gt=0, le=1024)
+    TRANSCRIPTION_CHUNK_SECONDS: int = Field(default=600, ge=30, le=3600)
 
     @field_validator("TRANSCRIPTION_PROVIDER", mode="before")
     @classmethod
     def _normalize_transcription_provider(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.strip().lower() or "fake"
+        return value
+
+    @field_validator(
+        "TRANSCRIPTION_API_BASE_URL",
+        "TRANSCRIPTION_API_KEY",
+        "TRANSCRIPTION_MODEL",
+        mode="before",
+    )
+    @classmethod
+    def _blank_transcription_setting_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
         return value
 
     @field_validator(

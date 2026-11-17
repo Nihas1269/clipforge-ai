@@ -37,6 +37,36 @@ class InvalidTranscriptionResultError(TranscriptionError, ValueError):
     """A transcription result violates the result schema."""
 
 
+class TranscriptionProviderError(TranscriptionError):
+    """A remote provider rejected the request, failed, or could not be reached.
+
+    `status_code` is the HTTP status, if a response was received. `retryable`
+    is True for failures that may succeed later (rate limits, server errors,
+    network problems, timeouts); `retry_after` is the provider's suggested
+    wait in seconds, if it sent one. Messages never include the response body.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+        self.retry_after = retry_after
+
+
+class TranscriptionTimeoutError(TranscriptionProviderError):
+    """The provider did not answer within the configured timeout."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, retryable=True)
+
+
 class InvalidLanguageError(ValueError):
     """A language value is not an ISO 639 code (BCP 47 tag) or "auto"."""
 

@@ -15,3 +15,19 @@ def isolated_settings(monkeypatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def audio_file(tmp_path):
+    """A small stand-in audio file whose name must never reach a provider."""
+    path = tmp_path / "my private recording.wav"
+    path.write_bytes(b"RIFF" + b"\x01" * 96)
+    return path
+
+
+@pytest.fixture
+def work_dir(tmp_path):
+    """An empty directory for temporary transcription chunks."""
+    path = tmp_path / "work"
+    path.mkdir()
+    return path

@@ -15,12 +15,16 @@ from app.transcription.base import (
     TranscriptionConfigurationError,
     TranscriptionError,
     TranscriptionProvider,
+    TranscriptionProviderError,
     TranscriptionResult,
     TranscriptionSegment,
+    TranscriptionTimeoutError,
     WordTiming,
     normalize_language,
 )
 from app.transcription.fake import FakeTranscriptionProvider
+from app.transcription.local_whisper import LocalWhisperTranscriptionProvider
+from app.transcription.openai_compatible import OpenAICompatibleTranscriptionProvider
 
 __all__ = [
     "AUTO_LANGUAGE",
@@ -28,11 +32,15 @@ __all__ = [
     "FakeTranscriptionProvider",
     "InvalidLanguageError",
     "InvalidTranscriptionResultError",
+    "LocalWhisperTranscriptionProvider",
+    "OpenAICompatibleTranscriptionProvider",
     "TranscriptionConfigurationError",
     "TranscriptionError",
     "TranscriptionProvider",
+    "TranscriptionProviderError",
     "TranscriptionResult",
     "TranscriptionSegment",
+    "TranscriptionTimeoutError",
     "WordTiming",
     "get_transcription_provider",
     "normalize_language",
@@ -40,6 +48,9 @@ __all__ = [
 
 _PROVIDERS: dict[str, Callable[[Settings], TranscriptionProvider]] = {
     "fake": lambda settings: FakeTranscriptionProvider(),
+    "openai_compatible": OpenAICompatibleTranscriptionProvider.from_settings,
+    # Imports faster-whisper only here, and fails clearly if it is missing.
+    "local_whisper": LocalWhisperTranscriptionProvider.from_settings,
 }
 
 
@@ -48,9 +59,11 @@ def get_transcription_provider(
 ) -> TranscriptionProvider:
     """Return the transcription provider selected by TRANSCRIPTION_PROVIDER.
 
-    Raises TranscriptionConfigurationError for an unknown provider name, and
-    for the fake provider when APP_ENV is production (it would store
-    placeholder text as a real transcript).
+    Raises TranscriptionConfigurationError for an unknown provider name, for
+    the fake provider when APP_ENV is production (it would store placeholder
+    text as a real transcript), when a real provider's required settings are
+    missing or invalid, and for local_whisper when faster-whisper is not
+    installed.
     """
     if settings is None:
         settings = get_settings()
