@@ -9,7 +9,7 @@ httpx==0.28.1
 pytest==9.0.3
 SQLAlchemy==2.0.44
 psycopg2-binary==2.9.11
-pydantic-settings==2.11.0
+pydantic-settings==2.16.3
 alembic==1.16.5
 argon2-cffi==25.1.0
 PyJWT==2.15.0
