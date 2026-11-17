@@ -804,6 +804,10 @@ not_found` (`get_owned_video` / `get_owned_clip`).
   a manual clip (`201`): source `manual`, status `accepted`, score `1`,
   reason "Created manually.", and the title "Clip at m:ss" when none is
   given.
+- `GET /clips/{clip_id}` — one clip (used by the clip editor).
+- `GET /clips/limits` — `{min_seconds, max_seconds}` from `CLIP_MIN_SECONDS`
+  / `CLIP_MAX_SECONDS`, so clients can check a range before saving it
+  (authenticated; it reveals only configuration).
 - `PATCH /clips/{clip_id}` `{start_seconds?, end_seconds?, title?, status?}` —
   only the fields sent change; an empty body or a `null` field is `422`.
 - `DELETE /clips/{clip_id}` — `204`.
@@ -1721,6 +1725,8 @@ root and is not versioned.
 | POST   | `/api/v1/videos/{id}/clips/detect` | —                         | `202` `{job_id, status}`; `401`; `403` untrusted origin (cookie auth); `404`; `409` `video_not_ready` / `transcript_required` / `clip_detection_in_progress`; `503` job could not be queued |
 | GET    | `/api/v1/videos/{id}/clips` | — (query `status` optional)      | `200` `{items: [clip], total}` by score, then start; `401`; `404`; `422` invalid status |
 | POST   | `/api/v1/videos/{id}/clips` | `{start_seconds, end_seconds, title?}` | `201` manual clip; `401`; `404`; `409` `video_not_ready`; `422` invalid range, length, title or field |
+| GET    | `/api/v1/clips/limits`  | —                                    | `200` `{min_seconds, max_seconds}` (`CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS`); `401` |
+| GET    | `/api/v1/clips/{clip_id}` | —                                  | `200` clip; `401`; `404` unknown or another user's clip; `422` invalid id |
 | PATCH  | `/api/v1/clips/{clip_id}` | `{start_seconds?, end_seconds?, title?, status?}` | `200` clip; `401`; `404` unknown or another user's clip; `409` `invalid_status_transition` / `video_not_ready`; `422` |
 | DELETE | `/api/v1/clips/{clip_id}` | —                                  | `204`; `401`; `404` |
 | POST   | `/api/v1/clips/{clip_id}/captions/generate` | —              | `200` `{clip_id, items, total}`; `401`; `404`; `409` `transcript_required` |

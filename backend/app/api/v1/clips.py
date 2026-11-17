@@ -13,6 +13,9 @@ the same 404 as a missing one.
   start (then earlier end and id), optionally filtered by status.
 - `POST /videos/{id}/clips` creates a manual clip. It is `accepted`, has
   score 1 and is never replaced by detection.
+- `GET /clips/limits` returns the CLIP_MIN_SECONDS / CLIP_MAX_SECONDS
+  length limits, so the clip editor can check a range before saving it.
+- `GET /clips/{id}` reads one clip.
 - `PATCH /clips/{id}` changes the range, title or status. The range must
   satisfy 0 <= start < end <= the video's duration and the CLIP_MIN_SECONDS /
   CLIP_MAX_SECONDS length limits (422 otherwise). Status changes follow
@@ -28,7 +31,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_owned_clip, get_owned_video
+from app.api.deps import get_current_user, get_owned_clip, get_owned_video
 from app.clips.base import TIME_TOLERANCE_SECONDS
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
@@ -46,6 +49,7 @@ from app.repositories.transcripts import get_transcript_for_video
 from app.schemas.clip import (
     ClipCreate,
     ClipDetectionQueued,
+    ClipLimits,
     ClipList,
     ClipRead,
     ClipUpdate,
@@ -254,6 +258,28 @@ def create_clip(
 
 
 # Single clips
+
+
+# Declared before `/clips/{clip_id}` so "limits" is not parsed as a clip id.
+@router.get(
+    "/clips/limits",
+    response_model=ClipLimits,
+    dependencies=[Depends(get_current_user)],
+)
+def read_clip_limits(settings: Settings = Depends(get_settings)) -> ClipLimits:
+    """The allowed clip length; every change is still validated on save."""
+    return ClipLimits(
+        min_seconds=settings.CLIP_MIN_SECONDS, max_seconds=settings.CLIP_MAX_SECONDS
+    )
+
+
+@router.get(
+    "/clips/{clip_id}",
+    response_model=ClipRead,
+    responses={404: {"description": "Unknown clip, or another user's clip."}},
+)
+def read_clip(clip: Clip = Depends(get_owned_clip)) -> ClipRead:
+    return ClipRead.model_validate(clip)
 
 
 def _lock_clip(db: Session, clip: Clip) -> Clip:

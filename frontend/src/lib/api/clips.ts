@@ -103,6 +103,51 @@ export async function createClip(videoId: string, input: CreateClipInput): Promi
   return toClip(await apiRequest<unknown>(videoClipsPath(videoId), { method: "POST", body }));
 }
 
+/** The clip length limits (`CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS`). */
+export interface ClipLimits {
+  min_seconds: number;
+  max_seconds: number;
+}
+
+export interface ClipRange {
+  start_seconds: number;
+  end_seconds: number;
+}
+
+/** One clip; another user's clip is `404` like a missing one. */
+export async function getClip(clipId: string): Promise<Clip> {
+  const clip = toClip(await apiRequest<unknown>(clipPath(clipId)));
+  if (typeof clip.video_id !== "string" || !clip.video_id) {
+    throw new ApiError(200, "invalid_response", GENERIC_ERROR_MESSAGE);
+  }
+  return clip;
+}
+
+/** The allowed clip length, so a range can be checked before it is sent. */
+export async function getClipLimits(): Promise<ClipLimits> {
+  const limits = await apiRequest<unknown>(`${CLIPS_PATH}/limits`);
+  if (
+    typeof limits !== "object" ||
+    limits === null ||
+    !isFiniteNumber((limits as { min_seconds?: unknown }).min_seconds) ||
+    !isFiniteNumber((limits as { max_seconds?: unknown }).max_seconds)
+  ) {
+    throw new ApiError(200, "invalid_response", GENERIC_ERROR_MESSAGE);
+  }
+  const { min_seconds, max_seconds } = limits as ClipLimits;
+  return { min_seconds, max_seconds };
+}
+
+/** Changes the clip's source-video range (`PATCH /clips/{id}`). The backend checks it again. */
+export async function updateClipRange(clipId: string, range: ClipRange): Promise<Clip> {
+  return toClip(
+    await apiRequest<unknown>(clipPath(clipId), {
+      method: "PATCH",
+      body: { start_seconds: range.start_seconds, end_seconds: range.end_seconds },
+    }),
+  );
+}
+
 /** Accepts or rejects a clip (`PATCH /clips/{id}` with `{status}`). */
 export async function updateClipStatus(clipId: string, status: Exclude<ClipStatus, "suggested">): Promise<Clip> {
   return toClip(await apiRequest<unknown>(clipPath(clipId), { method: "PATCH", body: { status } }));
