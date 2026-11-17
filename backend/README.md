@@ -108,6 +108,9 @@ Copy-Item .env.example .env
 | `TRANSCRIPTION_TIMEOUT_SECONDS` | `300`                  | Wall-clock limit of one transcription request (at most 1800). |
 | `TRANSCRIPTION_MAX_UPLOAD_MB` | `24`                     | Largest file sent in one request; larger audio is chunked.   |
 | `TRANSCRIPTION_CHUNK_SECONDS` | `600`                    | Longest chunk (30-3600 s), further limited by the upload size. |
+| `CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS` | `15` / `90`    | Shortest / longest suggested clip (at most 600; min must not exceed max). |
+| `CLIP_MAX_CLIPS`              | `10`                     | Most clips suggested per video (1-50).                       |
+| `CLIP_KEYWORDS`               | built-in list            | Comma-separated words or phrases the heuristic clip detector rewards (see Clips below). |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -622,6 +625,53 @@ provider limits each request with `TRANSCRIPTION_TIMEOUT_SECONDS`; the
 `local_whisper` provider has no timeout of its own beyond the job's time
 limits. A cancelled job's result can still be saved if the cancellation
 arrives after the final cancellation check.
+
+## Clips
+
+`app/models/clip.py` defines the `Clip` model (`clips` table, migration
+`0007`): `id`, `video_id` (`ON DELETE CASCADE`; a clip belongs to its video's
+owner, so ownership is always checked through the video), `start_seconds`,
+`end_seconds` (source-video seconds), `title`, `reason`, `score`, `status`
+(`suggested` (default), `accepted`, `rejected`), `source` (`heuristic`,
+`llm`, `manual`), `created_at` and `updated_at`. `CHECK` constraints require
+`start_seconds >= 0`, `end_seconds > start_seconds` and `0 <= score <= 1`;
+the index `ix_clips_video_id_start_seconds` loads a video's clips in timeline
+order. Deleting a video deletes its clips (`delete_video` also deletes them
+explicitly).
+
+**Detectors** (`app/clips/`):
+
+- `base.py` — the `ClipDetector` protocol
+  (`detect(segments, video_duration, options) -> list[ClipCandidate]`),
+  `ClipDetectionOptions` (`min_seconds`, `max_seconds`, `max_clips`;
+  `from_settings()` reads `CLIP_MIN_SECONDS`, `CLIP_MAX_SECONDS`,
+  `CLIP_MAX_CLIPS`), the frozen `ClipCandidate` (start, end, score in
+  `[0, 1]`, non-empty title of at most 200 characters, non-empty reason;
+  invalid values raise `InvalidClipCandidateError`) and
+  `validate_candidates()`, which every detector uses. It requires
+  `0 <= start < end <= duration` and a length within the options; values
+  outside the bounds by at most 1 ms (`TIME_TOLERANCE_SECONDS`, floating-point
+  noise) are snapped to the bound, anything further out is dropped, never
+  clamped. Candidates are ranked by score, then earlier start, then earlier
+  end (then title and reason), and taken greedily: a candidate overlapping
+  one already selected is dropped. Touching clips (one ends where the next
+  starts) are allowed. At most `max_clips` are returned, best first.
+- `heuristic.py` — `HeuristicClipDetector`, deterministic and offline. Every
+  window from one segment's start to a later segment's end whose length is
+  within the limits and that contains words is scored as
+  `0.4 * density + 0.3 * emphasis + 0.3 * keywords`, each a rate capped at 1:
+  words per second (full at 3), questions/exclamations per minute (full at
+  6) and keyword matches per minute (full at 4; `CLIP_KEYWORDS`, whole words
+  or phrases, case-insensitive). The score is rounded to 6 decimals. Titles
+  are the first words of the window's text; reasons list the signal counts.
+  Segments with invalid times or ending past the video are ignored. Logs
+  `clip_detection_completed` and `clip_candidates_validated` with counts only.
+
+Limitations: no job or endpoint runs clip detection or stores clips yet.
+The heuristic only sees the transcript text (no audio or visual signals), so
+its scores reflect wording, not actual interest; keywords are matched within
+a single segment, and the default keyword list is English. A `Clip` row
+records its `source` but not a detector, model or prompt version.
 
 ## Video upload
 

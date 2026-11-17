@@ -29,6 +29,24 @@ DEFAULT_ALLOWED_VIDEO_CONTENT_TYPES = (
     "video/x-matroska",
 )
 
+# Words and phrases the heuristic clip detector treats as a sign of an
+# interesting moment (see app/clips/heuristic.py).
+DEFAULT_CLIP_KEYWORDS = (
+    "secret",
+    "mistake",
+    "important",
+    "surprising",
+    "amazing",
+    "never",
+    "always",
+    "best",
+    "worst",
+    "how to",
+    "the truth",
+    "lesson",
+    "tip",
+)
+
 DEFAULT_FFMPEG_PATH = "ffmpeg"
 DEFAULT_FFPROBE_PATH = "ffprobe"
 
@@ -170,6 +188,40 @@ class Settings(BaseSettings):
     FFMPEG_MAX_OUTPUT_FILE_MB: int = Field(default=2048, gt=0)
     # Longer videos are marked failed by metadata extraction.
     MAX_VIDEO_DURATION_SECONDS: int = Field(default=7200, gt=0)
+    # Clip detection: length limits of a suggested clip, the most clips
+    # suggested per video, and the keywords the heuristic detector rewards
+    # (comma-separated in the environment; matched case-insensitively as
+    # whole words or phrases).
+    CLIP_MIN_SECONDS: float = Field(default=15.0, gt=0, le=600)
+    CLIP_MAX_SECONDS: float = Field(default=90.0, gt=0, le=600)
+    CLIP_MAX_CLIPS: int = Field(default=10, ge=1, le=50)
+    CLIP_KEYWORDS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_CLIP_KEYWORDS)
+    )
+
+    @field_validator("CLIP_KEYWORDS", mode="before")
+    @classmethod
+    def _split_clip_keywords(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.split(",")
+        return value
+
+    @field_validator("CLIP_KEYWORDS", mode="after")
+    @classmethod
+    def _normalize_clip_keywords(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for keyword in value:
+            # Inner whitespace is collapsed so "how  to" matches "how to".
+            keyword = " ".join(keyword.split()).casefold()
+            if keyword and keyword not in normalized:
+                normalized.append(keyword)
+        return normalized
+
+    @model_validator(mode="after")
+    def _check_clip_lengths(self) -> "Settings":
+        if self.CLIP_MIN_SECONDS > self.CLIP_MAX_SECONDS:
+            raise ValueError("CLIP_MIN_SECONDS must not exceed CLIP_MAX_SECONDS.")
+        return self
 
     @field_validator("FFMPEG_PATH", "FFPROBE_PATH", mode="before")
     @classmethod
