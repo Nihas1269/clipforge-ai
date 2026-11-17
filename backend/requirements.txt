@@ -19,7 +19,7 @@ email-validator==2.3.0
 # which is why the backend requires Python 3.11 or newer.
 dnspython==2.9.2
 boto3==1.40.0
-python-multipart==0.0.31
+python-multipart==0.0.33
 celery[redis]==5.5.3
 # Face tracking for reframing (app/reframe/face_tracking.py). Imported lazily;
 # without it face mode falls back to a center crop.
