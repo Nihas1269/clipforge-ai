@@ -417,11 +417,101 @@ logs `transcript_saved` (ids, provider, language, segment count; never the
 text).
 
 Limitations: only the fake provider exists, so `TRANSCRIPTION_PROVIDER` has
-no production value yet. No transcription job or API endpoint uses this
-yet. No claims are made about transcription quality for regional languages
-(Telugu, Hindi, Tamil, Kannada, Malayalam); the tests cover storage of their
-scripts, not recognition. Segments may overlap if a provider reports them
-that way; only their start times must be in order.
+no production value yet. No claims are made about transcription quality for
+regional languages (Telugu, Hindi, Tamil, Kannada, Malayalam); the tests
+cover storage of their scripts, not recognition. Segments may overlap if a
+provider reports them that way; only their start times must be in order.
+
+### Transcription jobs
+
+`POST /api/v1/videos/{id}/transcription` (body `{"language": "en"}`, or no
+body / `null` / `"auto"` for automatic detection) queues the `transcription`
+job `app.worker.transcription.transcribe_video` and returns `202
+{job_id, status}`; poll `GET /api/v1/jobs/{job_id}`. It returns `409
+video_not_ready` unless the video is `ready`, `409 transcription_in_progress`
+while a transcription job for the video is queued or running, `422` for an
+invalid language (see `normalize_language`) or unknown field, and `503
+queue_unavailable` when the job cannot be published. The job payload is
+`{"video_id", "language"}`, the idempotency key is the video id (so even two
+simultaneous requests share one job), 3 attempts, soft/hard time limit
+3300/3420 s.
+
+The job (`run_transcription`):
+
+1. checks that the video exists and is `ready` (the video's status is never
+   changed by transcription; the job records success or failure);
+2. extracts the audio with `extract_audio` (16 kHz mono WAV) into a new
+   temporary directory, from a local path obtained through
+   `storage.local_path` (the key must be the video's own key);
+3. calls the provider selected by `TRANSCRIPTION_PROVIDER`;
+4. checks the result against the video's duration (timestamps up to 1 s past
+   the end are clamped to the duration, later ones fail the job as an
+   invalid result), removes NUL characters, truncates the provider/model
+   names to their column sizes, and replaces the transcript and its segments
+   with `replace_transcript` in **one transaction**, after re-checking (with
+   the row locked) that the video still exists and is `ready`.
+
+The temporary directory is removed whether the job succeeds, fails or times
+out. Until step 4 commits, the previous transcript is untouched, so a failed,
+timed-out or cancelled job never leaves a partial or missing transcript; a
+failure while saving is rolled back. A job cancelled while running does not
+save its result.
+
+Retries: storage read errors and provider errors (`TranscriptionError`) are
+treated as temporary and retried with the standard backoff; after the last
+attempt the job fails with "The transcription service failed. Try again
+later.". An invalid result, a missing or unreadable audio track ("The video's
+audio could not be extracted. It may have no audio track."), a missing FFmpeg,
+an audio-extraction timeout, an unknown or refused provider, a missing file
+and a video that is no longer ready fail at once. Job messages never contain
+paths, keys, tool or provider output, or transcript text. Log events:
+`transcription_requested`, `transcription_rejected`, `transcription_started`,
+`transcript_saved`, `transcription_completed` (ids, provider, model,
+language, segment count) and failure events with the error type only.
+
+### Reading transcripts and subtitles
+
+All of these require authentication and use `get_owned_video` (another
+user's video is `404`); a video without a transcript is `404
+transcript_not_found`. Responses carry `Cache-Control: private, no-store`
+where they are downloads.
+
+- `GET /videos/{id}/transcript` — the transcript (`id`, `video_id`,
+  `language`, `requested_language`, `provider`, `model`, `full_text`,
+  `created_at`, `timing_granularity`) with its `segments` in order (`id`,
+  `index`, `start_seconds`, `end_seconds`, `text`, `words` or `null`).
+  `timing_granularity` is `"word"` only when every segment has word timings,
+  otherwise `"segment"`: with segment-level providers only segment
+  boundaries can be selected precisely.
+- `GET /videos/{id}/transcript/search?q=...&limit=50` — segments whose text
+  contains `q` (case-insensitive, whitespace collapsed; 1-200 characters;
+  `limit` 1-500), as `{query, total, items}`. Each item is a full segment, so
+  its `id`, `index` and times can be used to select ranges.
+- `GET /videos/{id}/transcript.srt` / `transcript.vtt` — subtitles generated
+  by the pure functions in `app/subtitles/formats.py`, served as
+  `application/x-subrip; charset=utf-8` / `text/vtt; charset=utf-8` with
+  `Content-Disposition: attachment; filename="<video name>.srt"` (only
+  `A-Z a-z 0-9 . _ -` are kept from the video's file name; `transcript.srt`
+  if nothing is left). SRT uses `HH:MM:SS,mmm` and cues numbered from 1;
+  WebVTT starts with `WEBVTT` and uses `HH:MM:SS.mmm`. Cues are in start
+  order with the stored times (rounded to milliseconds); empty cues are
+  skipped, line breaks and control characters in the text are collapsed or
+  removed, long captions are wrapped at 42 characters per line, WebVTT text
+  is escaped (`&`, `<`, `>`) and `-->` is written as `->` in SRT. Overlapping
+  segments are kept overlapping (both formats allow it).
+
+All times are seconds of **source-video** time; nothing is converted to clip
+time yet, so clip-relative views must subtract the clip start from these
+values. Segment `id`s are stable for the life of a transcript, but a new
+transcription replaces the segments and gives them new ids (use `index` and
+the times to map between versions).
+
+Limitations: search is a substring match over the stored segment texts (no
+stemming or ranking) done in the API process, which is fine for the
+transcript sizes the duration limit allows. The provider call has no
+timeout of its own beyond the job's time limits; real providers must set
+their own request timeouts. A cancelled job's result can still be saved if
+the cancellation arrives after the final cancellation check.
 
 ## Video upload
 
@@ -647,8 +737,9 @@ the worker log, so keep secrets out of exception messages and protect worker
 logs. A queued job whose message is lost inside Redis (for example after
 Redis data loss) stays queued; there is no automatic re-publishing. Stale
 running jobs are failed, not retried. A running task is not forcibly stopped
-on cancellation. Only the upload endpoint queues jobs so far (metadata
-extraction); no API endpoint cancels them yet.
+on cancellation. Jobs are queued by the upload endpoint (metadata
+extraction) and `POST /videos/{id}/transcription`; no API endpoint cancels
+them yet.
 
 ## Media metadata extraction
 
@@ -785,6 +876,11 @@ root and is not versioned.
 | GET    | `/api/v1/videos/{id}`   | —                                    | `200` `VideoRead`; `401`; `404` unknown or another user's video; `422` invalid id |
 | DELETE | `/api/v1/videos/{id}`   | —                                    | `204`; `401`; `403` untrusted origin (cookie auth); `404`; `500` database failure (nothing deleted); `503` storage misconfigured |
 | GET    | `/api/v1/videos/{id}/media` | — (optional `Range: bytes=...`)  | `307` to a short-lived URL (S3), or `200` whole file / `206` byte range; `401`; `404` (also `media_not_found`); `416` invalid or unsatisfiable range; `503` storage failure |
+| POST   | `/api/v1/videos/{id}/transcription` | `{language?}` (optional) | `202` `{job_id, status}`; `401`; `403` untrusted origin (cookie auth); `404`; `409` `video_not_ready` / `transcription_in_progress`; `422` invalid language or field; `503` job could not be queued |
+| GET    | `/api/v1/videos/{id}/transcript` | —                           | `200` transcript with segments; `401`; `404` (also `transcript_not_found`) |
+| GET    | `/api/v1/videos/{id}/transcript/search` | — (query `q` 1-200 chars, `limit` 1-500) | `200` `{query, total, items: [segment]}`; `401`; `404`; `422` |
+| GET    | `/api/v1/videos/{id}/transcript.srt` | —                       | `200` SubRip download; `401`; `404` (also `transcript_not_found`)       |
+| GET    | `/api/v1/videos/{id}/transcript.vtt` | —                       | `200` WebVTT download; `401`; `404` (also `transcript_not_found`)       |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an
