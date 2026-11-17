@@ -14,7 +14,12 @@ from celery import Celery
 from app.core.config import Settings, get_settings
 
 # Modules imported by the worker so their tasks are registered.
-TASK_MODULES = ("app.worker.jobs", "app.worker.metadata", "app.worker.storage_cleanup")
+TASK_MODULES = (
+    "app.worker.jobs",
+    "app.worker.metadata",
+    "app.worker.storage_cleanup",
+    "app.worker.transcription",
+)
 
 # Name of the periodic task that fails jobs left running by a lost worker
 # (see app.worker.jobs.fail_stale_jobs).
