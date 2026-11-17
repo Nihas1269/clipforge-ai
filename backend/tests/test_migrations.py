@@ -673,6 +673,159 @@ def test_downgrade_of_clips_migration_keeps_transcripts(database_url, engine):
     assert "videos" in table_names
 
 
+def test_upgrade_creates_billing_tables(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]: column for column in inspector.get_columns("subscriptions")
+    }
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "plan_code",
+        "status",
+        "provider",
+        "provider_subscription_id",
+        "current_period_start",
+        "current_period_end",
+        "created_at",
+        "updated_at",
+    }
+    for name in (
+        "provider_subscription_id",
+        "current_period_start",
+        "current_period_end",
+    ):
+        assert columns[name]["nullable"] is True, name
+    indexes = {index["name"]: index for index in inspector.get_indexes("subscriptions")}
+    assert indexes["ix_subscriptions_user_id"]["unique"]
+    assert indexes["ix_subscriptions_provider_subscription_id"]["unique"]
+
+    columns = {column["name"]: column for column in inspector.get_columns("payments")}
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "subscription_id",
+        "amount_minor",
+        "currency",
+        "status",
+        "provider_payment_id",
+        "created_at",
+    }
+    assert columns["subscription_id"]["nullable"] is True
+    indexes = {index["name"]: index for index in inspector.get_indexes("payments")}
+    assert indexes["ix_payments_provider_payment_id"]["unique"]
+    referred = {fk["referred_table"] for fk in inspector.get_foreign_keys("payments")}
+    assert referred == {"users", "subscriptions"}
+
+    columns = {
+        column["name"]: column for column in inspector.get_columns("usage_records")
+    }
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "metric",
+        "quantity",
+        "occurred_at",
+        "reference_id",
+    }
+    for name, column in columns.items():
+        assert column["nullable"] is False, name
+    (unique,) = inspector.get_unique_constraints("usage_records")
+    assert unique["column_names"] == ["user_id", "metric", "reference_id"]
+
+
+def test_migrated_billing_tables_enforce_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+    other_id = uuid.uuid4().hex
+    insert_subscription = text(
+        "INSERT INTO subscriptions (id, user_id, plan_code, status, provider, "
+        "current_period_start, current_period_end) VALUES (:id, :user_id, 'pro', "
+        ":status, 'razorpay', :start, :end)"
+    )
+    insert_payment = text(
+        "INSERT INTO payments (id, user_id, amount_minor, currency, status, "
+        "provider_payment_id) VALUES (:id, :user_id, :amount, :currency, "
+        ":status, :provider_payment_id)"
+    )
+    insert_usage = text(
+        "INSERT INTO usage_records (id, user_id, metric, quantity, occurred_at, "
+        "reference_id) VALUES (:id, :user_id, :metric, :quantity, "
+        "'2026-11-17 00:00:00', :reference_id)"
+    )
+    subscription = {
+        "status": "active",
+        "start": "2026-11-01 00:00:00",
+        "end": "2026-12-01 00:00:00",
+    }
+    payment = {
+        "amount": 99900,
+        "currency": "INR",
+        "status": "captured",
+        "provider_payment_id": "pay_1",
+    }
+    usage = {"metric": "exports", "quantity": 1, "reference_id": "r1"}
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(
+            INSERT_USER,
+            {"id": other_id, "email": "bob@example.com", "hashed_password": "x"},
+        )
+        connection.execute(
+            insert_subscription,
+            {"id": uuid.uuid4().hex, "user_id": user_id, **subscription},
+        )
+        connection.execute(
+            insert_payment, {"id": uuid.uuid4().hex, "user_id": user_id, **payment}
+        )
+        connection.execute(
+            insert_usage, {"id": uuid.uuid4().hex, "user_id": user_id, **usage}
+        )
+
+    invalid = [
+        (insert_subscription, subscription, {}),  # second subscription for user
+        # A user without a subscription, so only the checked value is invalid.
+        (insert_subscription, subscription, {"user_id": other_id, "status": "paused"}),
+        (
+            insert_subscription,
+            subscription,
+            {"user_id": other_id, "end": "2026-10-01 00:00:00"},
+        ),
+        (insert_payment, payment, {}),  # duplicate provider_payment_id
+        (insert_payment, payment, {"provider_payment_id": "pay_2", "amount": -1}),
+        (insert_payment, payment, {"provider_payment_id": "pay_3", "currency": "RS"}),
+        (insert_payment, payment, {"provider_payment_id": "pay_4", "status": "x"}),
+        (insert_usage, usage, {}),  # duplicate reference
+        (insert_usage, usage, {"reference_id": "r2", "quantity": -1}),
+        (insert_usage, usage, {"reference_id": "r3", "metric": "seconds"}),
+    ]
+    for statement, valid, values in invalid:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    statement,
+                    {"id": uuid.uuid4().hex, "user_id": user_id, **valid, **values},
+                )
+
+
+def test_downgrade_of_billing_migration_keeps_clips(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0007")
+
+    table_names = inspect(engine).get_table_names()
+    for name in ("subscriptions", "payments", "usage_records"):
+        assert name not in table_names
+    assert "clips" in table_names
+    assert "users" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

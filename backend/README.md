@@ -120,6 +120,13 @@ Copy-Item .env.example .env
 | `LLM_MAX_PROMPT_CHARS`        | `24000`                  | Longest prompt per request (2000-400000); longer transcripts are chunked. |
 | `LLM_MAX_OUTPUT_TOKENS`       | `2048`                   | Most tokens generated per request (256-16384).               |
 | `LLM_INPUT_COST_PER_MILLION_TOKENS` / `LLM_OUTPUT_COST_PER_MILLION_TOKENS` | unset | Optional USD prices, used only to log an estimated cost. |
+| `BILLING_FREE_MONTHLY_UPLOAD_MINUTES` / `BILLING_PRO_MONTHLY_UPLOAD_MINUTES` | `60` / `600` | Upload minutes per usage period (`>= 0`; see Billing below). |
+| `BILLING_FREE_MONTHLY_EXPORTS` / `BILLING_PRO_MONTHLY_EXPORTS` | `10` / `200` | Exports per usage period (`>= 0`). |
+| `BILLING_FREE_MAX_VIDEO_DURATION_SECONDS` / `BILLING_PRO_MAX_VIDEO_DURATION_SECONDS` | `1800` / `7200` | Longest video per plan (positive). |
+| `BILLING_FREE_MAX_UPLOAD_SIZE_MB` / `BILLING_PRO_MAX_UPLOAD_SIZE_MB` | `250` / `500` | Largest upload per plan in MiB (positive). |
+| `BILLING_PRO_PRICE_MINOR`     | `99900`                  | Pro price in paise (positive integer; a placeholder, not an approved price). |
+| `BILLING_PRO_INCLUDED_CREDITS` | `0`                     | Usage credits included per pro period (`>= 0`; for the credit ledger, CF-049). |
+| `RAZORPAY_PRO_PLAN_ID`        | unset                    | Razorpay plan id of the pro plan (`A-Z a-z 0-9 _`, at most 64). Not used yet. |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -744,6 +751,80 @@ The heuristic only sees the transcript text (no audio or visual signals), so
 its scores reflect wording, not actual interest; keywords are matched within
 a single segment, and the default keyword list is English. A `Clip` row
 records its `source` but not a detector, model or prompt version.
+
+## Billing: plans, subscriptions and usage
+
+**Plans** (`app/billing/plans.py`) are defined in code: `free` and `pro`.
+Each `Plan` has `code`, `name`, `price_minor` (integer paise), `currency`
+(`INR`), `interval` (`month`), `included_credits`, `razorpay_plan_id` and
+`limits` (`monthly_upload_minutes`, `monthly_exports`,
+`max_video_duration_seconds`, `max_upload_size_mb`). The pro price, included
+credits and every limit come from the `BILLING_*` settings, and the Razorpay
+plan id from `RAZORPAY_PRO_PLAN_ID`; nothing is hardcoded. The defaults are
+placeholders for development, not approved prices. Invalid values (negative
+limits, a zero size/duration limit or pro price, pro limits lower than the
+free ones, a malformed plan id) stop the application at startup.
+`get_plans()` / `get_plan(code)` build the plans from the settings.
+
+**Models** (`app/models/billing.py`, migration `0008`):
+
+- `subscriptions`: `user_id` (unique, `ON DELETE CASCADE`), `plan_code`,
+  `status` (`active`, `pending`, `past_due`, `cancelled`, `expired`),
+  `provider`, `provider_subscription_id` (unique when set),
+  `current_period_start`/`current_period_end` (nullable; `CHECK end > start`),
+  `created_at`, `updated_at`. There is **one current row per user**, updated
+  in place on renewal, cancellation or plan change; subscription history is
+  not kept as rows (payments are).
+- `payments`: `user_id`, `subscription_id` (`ON DELETE SET NULL`),
+  `amount_minor` (integer minor units, `>= 0`), `currency` (3 letters),
+  `status` (`created`, `authorized`, `captured`, `failed`, `refunded`),
+  `provider_payment_id` (unique), `created_at`. Payments are append-only.
+- `usage_records`: `user_id`, `metric` (`upload_minutes`, `exports`),
+  `quantity` (integer, `>= 0`), `occurred_at`, `reference_id`. A unique
+  constraint on `(user_id, metric, reference_id)` makes recording
+  idempotent; an index on `(user_id, metric, occurred_at)` serves the sums.
+
+All timestamps are timezone-aware UTC; the models reject naive values and
+convert others to UTC before storing them.
+
+**Service** (`app/billing/service.py`):
+
+- `get_effective_plan(db, user, now=None)` returns `pro` only when the
+  user's subscription has status `active` or `cancelled` (a cancelled
+  subscription keeps access for the period already paid for), a known paid
+  `plan_code`, and `current_period_start <= now < current_period_end`.
+  Anything else — no subscription, `pending`, `past_due`, `expired`, a
+  missing or ended period, an unknown plan code (logged as
+  `subscription_unknown_plan`) — gives `free`.
+- `get_usage_for_current_period(db, user, now=None)` returns a
+  `UsageSummary` (`plan`, `period_start`, `period_end`, `upload_minutes`,
+  `exports`). The period is half-open `[start, end)`: the subscription's
+  period for a user with paid access, otherwise the calendar month in UTC.
+- `record_usage(db, user, metric, quantity, reference_id=..., occurred_at=None)`
+  commits one record per `(user, metric, reference_id)`. Recording the same
+  reference again returns the existing record (a different quantity raises
+  `UsageConflictError`); when two calls race, the unique constraint decides
+  and the loser returns the winner's record, so usage is never counted
+  twice. `quantity` must be a non-negative integer.
+- Rounding: `upload_minutes_from_seconds(seconds)` rounds a duration to whole
+  milliseconds and then **up** to whole minutes (61 s → 2 minutes, 0 s → 0).
+- `record_payment(db, user, amount_minor=..., provider_payment_id=..., status=...)`
+  commits a payment and raises `DuplicatePaymentError` for a
+  `provider_payment_id` that is already recorded (also when a concurrent
+  insert wins).
+- Log events: `usage_recorded`, `usage_record_duplicate`, `payment_recorded`
+  (ids, metric, quantity, amount, status; never provider ids).
+
+Limitations: no payment provider is called and no endpoint exposes billing
+yet; subscriptions are only written by code and tests for now. Limits are
+not enforced yet, and checking a limit and then recording usage are two
+steps, so concurrent requests can together exceed a limit (enforcement must
+lock or re-check). `past_due` gets no grace period. Plan size and duration
+limits above the global `MAX_UPLOAD_SIZE_MB` / `MAX_VIDEO_DURATION_SECONDS`
+have no effect, because the upload and metadata checks still apply those.
+`record_usage` and `record_payment` commit (or roll back) the session, so
+callers must not have other pending work in it. The usage credit ledger is
+separate work (CF-049).
 
 ## Video upload
 
