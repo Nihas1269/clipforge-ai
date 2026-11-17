@@ -18,6 +18,7 @@ TASK_MODULES = (
     "app.worker.jobs",
     "app.worker.clip_detection",
     "app.worker.metadata",
+    "app.worker.render",
     "app.worker.storage_cleanup",
     "app.worker.transcription",
 )
