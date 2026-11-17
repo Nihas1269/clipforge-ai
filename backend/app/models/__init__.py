@@ -4,6 +4,14 @@ Import every model here so that `Base.metadata` is complete for Alembic.
 """
 
 from app.models.auth_token import AuthToken, AuthTokenPurpose
+from app.models.billing import (
+    Payment,
+    PaymentStatus,
+    Subscription,
+    SubscriptionStatus,
+    UsageMetric,
+    UsageRecord,
+)
 from app.models.clip import Clip, ClipSource, ClipStatus
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.storage_deletion import PendingStorageDeletion
@@ -19,10 +27,16 @@ __all__ = [
     "ClipStatus",
     "JobStatus",
     "JobType",
+    "Payment",
+    "PaymentStatus",
     "PendingStorageDeletion",
     "ProcessingJob",
+    "Subscription",
+    "SubscriptionStatus",
     "Transcript",
     "TranscriptSegment",
+    "UsageMetric",
+    "UsageRecord",
     "User",
     "Video",
 ]

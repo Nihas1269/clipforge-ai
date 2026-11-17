@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
@@ -46,6 +47,9 @@ DEFAULT_CLIP_KEYWORDS = (
     "lesson",
     "tip",
 )
+
+# Razorpay plan ids look like "plan_00000000000001".
+RAZORPAY_PLAN_ID_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 DEFAULT_FFMPEG_PATH = "ffmpeg"
 DEFAULT_FFPROBE_PATH = "ffprobe"
@@ -305,6 +309,60 @@ class Settings(BaseSettings):
     # split into consecutive chunks of at most TRANSCRIPTION_CHUNK_SECONDS.
     TRANSCRIPTION_MAX_UPLOAD_MB: int = Field(default=24, gt=0, le=1024)
     TRANSCRIPTION_CHUNK_SECONDS: int = Field(default=600, ge=30, le=3600)
+
+    # Billing plans (app/billing/plans.py). Every price and limit is
+    # configurable; the defaults are placeholders, not approved commercial
+    # terms. Prices are in minor units (paise). Usage limits may be 0 (none
+    # included); size and duration limits must be positive. The pro plan's
+    # limits must not be lower than the free plan's.
+    BILLING_FREE_MONTHLY_UPLOAD_MINUTES: int = Field(default=60, ge=0)
+    BILLING_FREE_MONTHLY_EXPORTS: int = Field(default=10, ge=0)
+    BILLING_FREE_MAX_VIDEO_DURATION_SECONDS: int = Field(default=1800, gt=0)
+    BILLING_FREE_MAX_UPLOAD_SIZE_MB: int = Field(default=250, gt=0)
+    BILLING_PRO_PRICE_MINOR: int = Field(default=99900, gt=0)
+    # Usage credits included per billing period (for the credit ledger of
+    # CF-049); 0 until that model is in place.
+    BILLING_PRO_INCLUDED_CREDITS: int = Field(default=0, ge=0)
+    BILLING_PRO_MONTHLY_UPLOAD_MINUTES: int = Field(default=600, ge=0)
+    BILLING_PRO_MONTHLY_EXPORTS: int = Field(default=200, ge=0)
+    BILLING_PRO_MAX_VIDEO_DURATION_SECONDS: int = Field(default=7200, gt=0)
+    BILLING_PRO_MAX_UPLOAD_SIZE_MB: int = Field(default=500, gt=0)
+    # Razorpay plan id of the pro plan (created in the Razorpay dashboard). Not
+    # a secret; optional because no payment provider is called yet.
+    RAZORPAY_PRO_PLAN_ID: str | None = None
+
+    @field_validator("RAZORPAY_PRO_PLAN_ID", mode="before")
+    @classmethod
+    def _blank_razorpay_plan_id_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("RAZORPAY_PRO_PLAN_ID", mode="after")
+    @classmethod
+    def _validate_razorpay_plan_id(cls, value: str | None) -> str | None:
+        if value is not None and not RAZORPAY_PLAN_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                "RAZORPAY_PRO_PLAN_ID must be 1-64 characters of A-Z a-z 0-9 _."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _check_billing_plan_limits(self) -> "Settings":
+        for limit in (
+            "MONTHLY_UPLOAD_MINUTES",
+            "MONTHLY_EXPORTS",
+            "MAX_VIDEO_DURATION_SECONDS",
+            "MAX_UPLOAD_SIZE_MB",
+        ):
+            free_value = getattr(self, f"BILLING_FREE_{limit}")
+            pro_value = getattr(self, f"BILLING_PRO_{limit}")
+            if pro_value < free_value:
+                raise ValueError(
+                    f"BILLING_PRO_{limit} must not be lower than BILLING_FREE_{limit}."
+                )
+        return self
 
     @field_validator("TRANSCRIPTION_PROVIDER", mode="before")
     @classmethod
