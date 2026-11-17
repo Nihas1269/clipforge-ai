@@ -127,7 +127,12 @@ Copy-Item .env.example .env
 | `BILLING_FREE_MAX_UPLOAD_SIZE_MB` / `BILLING_PRO_MAX_UPLOAD_SIZE_MB` | `250` / `500` | Largest upload per plan in MiB (positive). |
 | `BILLING_PRO_PRICE_MINOR`     | `99900`                  | Pro price in paise (positive integer; a placeholder, not an approved price). |
 | `BILLING_PRO_INCLUDED_CREDITS` | `0`                     | Usage credits included per pro period (`>= 0`; for the credit ledger, CF-049). |
-| `RAZORPAY_PRO_PLAN_ID`        | unset                    | Razorpay plan id of the pro plan (`A-Z a-z 0-9 _`, at most 64). Not used yet. |
+| `RAZORPAY_PRO_PLAN_ID`        | unset                    | Razorpay plan id of the pro plan (`A-Z a-z 0-9 _`, at most 64). Required for checkout. |
+| `RAZORPAY_KEY_ID`             | unset                    | Razorpay key id (`rzp_test_...` / `rzp_live_...`; public). Required for billing. |
+| `RAZORPAY_KEY_SECRET`         | unset                    | Razorpay key secret (API auth and payment signatures). Required for billing. |
+| `RAZORPAY_WEBHOOK_SECRET`     | unset                    | Separate secret that verifies Razorpay webhook signatures.   |
+| `RAZORPAY_TIMEOUT_SECONDS`    | `15`                     | Timeout of each connect/read/write of a Razorpay API request (at most 60; connect at most 10). |
+| `RAZORPAY_SUBSCRIPTION_TOTAL_COUNT` | `60`               | Billing cycles of a new subscription (Razorpay `total_count`, 1-1200). |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -978,8 +983,8 @@ convert others to UTC before storing them.
 - Log events: `usage_recorded`, `usage_record_duplicate`, `payment_recorded`
   (ids, metric, quantity, amount, status; never provider ids).
 
-Limitations: no payment provider is called and no endpoint exposes billing
-yet; subscriptions are only written by code and tests for now. Limits are
+Limitations: subscriptions are written only by the checkout endpoints below
+(and by code and tests); webhooks are not processed yet. Limits are
 not enforced yet, and checking a limit and then recording usage are two
 steps, so concurrent requests can together exceed a limit (enforcement must
 lock or re-check). `past_due` gets no grace period. Plan size and duration
@@ -988,6 +993,107 @@ have no effect, because the upload and metadata checks still apply those.
 `record_usage` and `record_payment` commit (or roll back) the session, so
 callers must not have other pending work in it. The usage credit ledger is
 separate work (CF-049).
+
+### Razorpay checkout
+
+Setup (test mode first): `docs/setup/razorpay.md`. The provider interface is
+`PaymentProvider` in `app/billing/providers/base.py`
+(`create_subscription`, `fetch_subscription`, `cancel_subscription`,
+`verify_payment_signature`, `verify_webhook_signature`); the Razorpay
+implementation (`app/billing/providers/razorpay.py`) calls
+`https://api.razorpay.com/v1` with `httpx` (no SDK), basic auth
+`RAZORPAY_KEY_ID:RAZORPAY_KEY_SECRET`, a `RAZORPAY_TIMEOUT_SECONDS` timeout,
+no redirects and no retries. Signatures are hex HMAC-SHA256 compared with
+`hmac.compare_digest`: the checkout **payment** signature over
+`"<payment_id>|<subscription_id>"` with the key secret, the **webhook**
+signature over the raw body with the separate `RAZORPAY_WEBHOOK_SECRET`.
+
+Endpoints (all authenticated; each acts only on the caller's own
+subscription; logic in `app/billing/checkout.py`):
+
+- `POST /api/v1/billing/checkout` `{plan_code}` — creates a Razorpay
+  subscription for the plan's configured Razorpay plan id and stores the
+  user's subscription as `pending`; returns `{provider: "razorpay", key_id,
+  subscription_id}` for Razorpay Checkout. The price is the Razorpay plan's;
+  the client cannot send an amount (`422` for unknown fields or plans). The
+  `free` plan is `400 plan_not_purchasable`; a user with paid access or a
+  `past_due` subscription gets `409 subscription_exists`. A pending checkout
+  for the same plan is fetched from Razorpay and returned again while
+  Razorpay reports it `created`/`authenticated`/`pending` for the configured
+  plan id; one that has ended there (`expired`, `cancelled`, `halted`,
+  `completed`) or has another plan id (e.g. after `RAZORPAY_PRO_PLAN_ID`
+  changed) is replaced by a new Razorpay subscription; if it could still
+  charge (`created`/`authenticated`/`pending`) it is first cancelled at
+  Razorpay immediately (`cancel_at_cycle_end=0`), and a failed cancel leaves
+  everything unchanged. One Razorpay reports `active` for the configured
+  plan id with a valid period (paid, but `/verify` never arrived, e.g. the
+  tab was closed) is activated from Razorpay's state and checkout answers
+  `409 subscription_exists`; any other state (e.g. `paused`) is `409
+  checkout_unsettled`. Any other earlier Razorpay subscription (`active`,
+  `cancelled` or `expired` locally, with a lapsed period) is also fetched
+  first: it is replaced only when Razorpay reports it ended (`expired`,
+  `cancelled`, `halted`, `completed`); while it can still charge, checkout is
+  `409 subscription_exists`, so a user is never subscribed twice.
+- `POST /api/v1/billing/verify` `{razorpay_payment_id,
+  razorpay_subscription_id, razorpay_signature}` — the subscription id must
+  be the caller's pending checkout (`404 subscription_not_found` otherwise)
+  and the signature valid (`400 invalid_signature`, nothing changes). The
+  subscription is then fetched from Razorpay and becomes `active` with
+  Razorpay's current period only when Razorpay reports `active` for the
+  expected plan; `created`/`authenticated`/`pending` keep it `pending` (`202`),
+  other states are `409 subscription_not_active`, another plan is `409
+  subscription_plan_mismatch`. A repeated callback for an active subscription
+  returns it unchanged without calling Razorpay.
+- `POST /api/v1/billing/cancel` — cancels at Razorpay with
+  `cancel_at_cycle_end=1` and marks the subscription `cancelled`, which keeps
+  paid access until `current_period_end`. Cancelling again is a no-op; no
+  subscription is `404`, one that is not active `409 no_active_subscription`.
+  A `pending` subscription is first fetched from Razorpay: when it is paid
+  there (as for checkout above) it is activated and cancelled in one
+  transaction, so a failed cancel leaves it `pending`.
+  When Razorpay refuses the cancel (`4xx`) and a fetch shows the
+  subscription already `cancelled`/`completed`/`expired` there (e.g.
+  cancelled from the dashboard), it is marked `cancelled` locally as well.
+
+While `RAZORPAY_KEY_ID` (format `rzp_test_...`/`rzp_live_...`) or
+`RAZORPAY_KEY_SECRET` is missing or invalid, every billing endpoint returns
+`503 billing_not_configured` (checkout also when `RAZORPAY_PRO_PLAN_ID` is
+unset). Razorpay timeouts are `504 payment_provider_timeout`; network errors,
+non-2xx answers and malformed or oversized responses are `502
+payment_provider_error`. A failed call never changes the subscription. Log
+events (`billing_checkout_created`, `billing_checkout_reused`,
+`billing_subscription_activated`, `billing_payment_signature_invalid`,
+`billing_subscription_cancelled`, `razorpay_request_failed`, ...) carry user
+and subscription ids, operation, status code and reason; never keys,
+signatures, provider ids or response bodies.
+
+Limitations: webhooks (renewals, failed charges, `subscription.activated`
+arriving before the browser callback) are not processed yet, so a paid
+subscription stays `pending` until `/verify`, a new `/checkout` or `/cancel`
+reads Razorpay's `active` state (there is no background sync), and renewals
+do not move `current_period_end` yet: a
+renewing subscriber's pro access ends locally at the first period's end, and
+checkout then answers `409 subscription_exists` (it does not create a second
+Razorpay subscription) until webhook processing syncs the period.
+Payments are not recorded in `payments` by these endpoints. A Razorpay
+subscription is left unused (in `created` state, never paid) when saving a
+new checkout fails after Razorpay created it (a database error), or when
+the create request times out or the connection drops after Razorpay
+received it: the next checkout creates another one. Such orphans are not
+cancelled automatically; find them in the dashboard by the `user_id` note
+and cancel them. A pending checkout that Razorpay reports `paused` (or in
+another unexpected state), or `active` for a plan id other than the
+configured one (after `RAZORPAY_PRO_PLAN_ID` changed), is neither activated
+nor replaced: checkout answers `409 checkout_unsettled`, verify `409`, and
+cancel `409 no_active_subscription`. The owner must resolve it in the
+Razorpay dashboard (resume or cancel it); once Razorpay reports it ended,
+the next checkout replaces it. A `past_due` subscription can
+neither start a new checkout nor be cancelled through these endpoints until
+webhook processing exists. The row lock that serializes a user's requests is held during the
+Razorpay calls (up to four per checkout) and has no effect on SQLite.
+`RAZORPAY_TIMEOUT_SECONDS` limits each connect, read, write and pool wait of
+a request separately, not the request as a whole, so a response streamed
+slowly (up to the 1 MiB limit) can take longer. Tested only with `httpx.MockTransport`, never against Razorpay.
 
 ## Video upload
 

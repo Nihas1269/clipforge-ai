@@ -375,8 +375,36 @@ class Settings(BaseSettings):
     BILLING_PRO_MAX_VIDEO_DURATION_SECONDS: int = Field(default=7200, gt=0)
     BILLING_PRO_MAX_UPLOAD_SIZE_MB: int = Field(default=500, gt=0)
     # Razorpay plan id of the pro plan (created in the Razorpay dashboard). Not
-    # a secret; optional because no payment provider is called yet.
+    # a secret; checkout returns 503 billing_not_configured while it is unset.
     RAZORPAY_PRO_PLAN_ID: str | None = None
+    # Razorpay API key (docs/setup/razorpay.md). Optional so the app starts
+    # without them; the billing endpoints return 503 billing_not_configured
+    # while the key id or secret is missing or the key id is malformed. The
+    # key id is public (the checkout widget uses it); the key secret signs
+    # checkout payments. The webhook secret is a separate value chosen in the
+    # Razorpay dashboard and only verifies webhooks.
+    RAZORPAY_KEY_ID: str | None = None
+    RAZORPAY_KEY_SECRET: SecretStr | None = None
+    RAZORPAY_WEBHOOK_SECRET: SecretStr | None = None
+    # Timeout of each connect, read, write and pool wait of a Razorpay API
+    # request (each phase separately, not the request as a whole).
+    RAZORPAY_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
+    # Billing cycles of a new subscription (Razorpay's `total_count`); check
+    # Razorpay's maximum for monthly plans before raising it.
+    RAZORPAY_SUBSCRIPTION_TOTAL_COUNT: int = Field(default=60, ge=1, le=1200)
+
+    @field_validator(
+        "RAZORPAY_KEY_ID",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+        mode="before",
+    )
+    @classmethod
+    def _blank_razorpay_credential_is_unset(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
 
     @field_validator("RAZORPAY_PRO_PLAN_ID", mode="before")
     @classmethod
