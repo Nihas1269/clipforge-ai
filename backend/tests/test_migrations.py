@@ -604,11 +604,15 @@ def test_upgrade_creates_clips_table(database_url, engine):
         "score",
         "status",
         "source",
+        "detector_version",
+        "detector_model",
+        "prompt_version",
         "created_at",
         "updated_at",
     }
+    provenance = {"detector_version", "detector_model", "prompt_version"}
     for name, column in columns.items():
-        assert column["nullable"] is False, name
+        assert column["nullable"] is (name in provenance), name
     indexes = {index["name"]: index for index in inspector.get_indexes("clips")}
     assert indexes["ix_clips_video_id_start_seconds"]["column_names"] == [
         "video_id",
@@ -671,6 +675,23 @@ def test_downgrade_of_clips_migration_keeps_transcripts(database_url, engine):
     assert "clips" not in table_names
     assert "transcripts" in table_names
     assert "videos" in table_names
+
+
+def test_downgrade_of_clip_provenance_keeps_clips(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0008")
+
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("clips")}
+    assert not columns & {"detector_version", "detector_model", "prompt_version"}
+    assert "source" in columns
+    # Only the provenance migration is rolled back; billing tables stay.
+    assert "subscriptions" in inspector.get_table_names()
+
+    command.upgrade(config, "head")
+    columns = {column["name"] for column in inspect(engine).get_columns("clips")}
+    assert "detector_version" in columns
 
 
 def test_upgrade_creates_billing_tables(database_url, engine):

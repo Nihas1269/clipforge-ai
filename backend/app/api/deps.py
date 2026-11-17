@@ -16,8 +16,10 @@ from app.core.errors import AppError
 from app.core.rate_limit import InMemoryRateLimiter
 from app.core.security import InvalidAccessTokenError, decode_access_token
 from app.database import get_db
+from app.models.clip import Clip
 from app.models.user import User
 from app.models.video import Video
+from app.repositories.clips import get_clip_for_user
 from app.repositories.users import get_by_id
 from app.repositories.videos import get_video_for_user
 from app.services.email import EmailNotConfiguredError, EmailSender, build_email_sender
@@ -210,6 +212,22 @@ def get_owned_video(
     if video is None:
         raise AppError(404, "not_found", "Video not found.")
     return video
+
+
+def get_owned_clip(
+    clip_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Clip:
+    """Return the `{clip_id}` clip if its video belongs to the current user.
+
+    Ownership is checked through the parent video; another user's clip gets
+    the same 404 as one that does not exist.
+    """
+    clip = get_clip_for_user(db, clip_id, user.id)
+    if clip is None:
+        raise AppError(404, "not_found", "Clip not found.")
+    return clip
 
 
 def get_current_admin(user: User = Depends(get_current_user)) -> User:
