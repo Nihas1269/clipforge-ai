@@ -72,6 +72,17 @@ class ClipList(BaseModel):
     total: int = Field(ge=0)
 
 
+class ClipLimits(BaseModel):
+    """The clip length limits (`CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS`).
+
+    Clients use them to check a range before sending it; the endpoints still
+    validate every change.
+    """
+
+    min_seconds: float
+    max_seconds: float
+
+
 class ClipCreate(BaseModel):
     """Body of `POST /videos/{id}/clips`: a manually chosen clip."""
 

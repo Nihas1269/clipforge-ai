@@ -514,6 +514,17 @@ describe("VideoDetail clips", () => {
     expect(screen.getByRole("button", { name: "Find clips" })).toBeEnabled();
   });
 
+  it("links each clip to its editor", async () => {
+    backend.clips = [makeClip(), makeClip({ id: "clip/2", title: "Second" })];
+
+    render(<VideoDetail videoId={VIDEO_ID} />);
+
+    const item = await screen.findByTestId("clip-clip-1");
+    expect(within(item).getByRole("link", { name: "Edit Big idea" })).toHaveAttribute("href", "/clips/clip-1");
+    // The id is encoded as one path segment.
+    expect(screen.getByRole("link", { name: "Edit Second" })).toHaveAttribute("href", "/clips/clip%2F2");
+  });
+
   it("finds clips with a detection job and shows the new suggestions", async () => {
     vi.useFakeTimers();
     backend.transcript = makeTranscript([segment(0, 0, 5, "Hello")]);

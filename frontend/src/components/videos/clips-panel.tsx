@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { Button } from "@/components/button";
@@ -304,6 +305,13 @@ export function ClipsPanel({ videoId, hasTranscript, videoReady, durationSeconds
                 >
                   Preview
                 </Button>
+                <Link
+                  href={`/clips/${encodeURIComponent(clip.id)}`}
+                  aria-label={`Edit ${clip.title}`}
+                  className="inline-flex items-center justify-center rounded-md border border-border bg-surface-raised px-4 py-2 text-sm font-medium text-fg hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Edit
+                </Link>
                 <Button
                   onClick={() => void changeStatus(clip, "accepted")}
                   disabled={pending || !videoReady || clip.status === "accepted"}

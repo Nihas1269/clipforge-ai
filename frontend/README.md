@@ -110,17 +110,18 @@ src/
   app/          Routes (App Router): root layout, landing page, /login,
                 /register, the protected /dashboard,
                 /settings/profile, /videos/new, the /videos/[id] detail
-                page, and the shared loading, error, and not-found
-                states
+                page, the /clips/[id] clip editor, and the shared
+                loading, error, and not-found states
   components/   Reusable UI components (Button, Container, SiteHeader,
                 StatusMessage, TextField), the auth forms in auth/, the
                 session provider, protected layout and user menu in
                 session/, the profile forms in profile/, the upload
-                form and the video detail page in videos/, and the
-                dashboard in dashboard/
+                form and the video detail page in videos/, the
+                dashboard in dashboard/, and the clip editor in clips/
   lib/          Shared constants, the API client (lib/api), media
-                timestamps (lib/timestamps.ts), and form validation
-                (lib/validation)
+                timestamps (lib/timestamps.ts), the clip editor's pure
+                timing and validation helpers (lib/clip-editor.ts), and
+                form validation (lib/validation)
   test-utils/   Test helpers (a fake XMLHttpRequest)
 ```
 
@@ -264,7 +265,7 @@ validate and store the file.
   enabled only when a transcript exists; it calls
   `POST /videos/{id}/clips/detect` and follows the job. Each clip shows its
   title, time range, duration, score, reason and status, with **Preview**,
-  **Accept** and **Reject** (`PATCH /clips/{id}` with `{status}`; the list
+  **Edit** (opens the clip editor, see below), **Accept** and **Reject** (`PATCH /clips/{id}` with `{status}`; the list
   shows the clip the backend returns). **Add clip manually** takes a start
   and end time (`m:ss`, `h:mm:ss` or seconds) and an optional title.
 - **Jobs** (`src/lib/api/jobs.ts`, `use-tracked-job.ts`, `use-polling.ts`).
@@ -297,6 +298,83 @@ only the backend enforces them. Subtitle downloads are plain links: a
 failure (for example an expired session) is shown by the browser, not the
 page. Long transcripts are rendered in full inside a scrollable list (no
 virtualization); the backend's duration limit keeps them bounded.
+
+## Clip editor
+
+`/clips/[id]` (`src/components/clips/clip-editor.tsx`, protected by
+`src/app/clips/layout.tsx`) fine-tunes one clip before export. Each clip in
+the video page's clip list has an **Edit** link to it. The page loads the
+clip (`GET /clips/{id}`), its video, its captions, its caption style and the
+clip length limits (`GET /clips/limits`); without the limits or the style
+it still works (the backend checks the length on save; the overlay uses the
+classic look).
+
+- **Time bases.** Clip boundaries are seconds of the **source video** (the
+  player's `currentTime`). Caption times are seconds **from the clip start**,
+  as in the rendered clip. The overlay converts with
+  `clip time = source time - clip start`. Moving the start therefore moves
+  the captions with it (the backend does not shift them);
+  **Regenerate from transcript** re-aligns them with the speech.
+- **Preview.** The video plays only inside the clip: **Play clip** starts
+  from the clip start when the playhead is outside the clip (the native play
+  button also restarts from the clip start at the clip end), and playback
+  stops at the clip end (or returns to the start when **Loop playback** is
+  checked). While paused, the user can seek anywhere (native controls) to
+  pick a new boundary. The preview follows the edited range as soon as it is
+  ordered and inside the video.
+- **Caption overlay.** An HTML overlay shows the captions for the current
+  time with the ASS renderer's rules (`captionsAt` in
+  `src/lib/clip-editor.ts`): times rounded to centiseconds, at least 1 cs
+  long, shown while `start <= now < end`, text cleaned, upper-cased if the
+  style says so and wrapped to `max_chars_per_line`. Font size is scaled
+  from the 1080-pixel reference to the preview's shorter side, and the
+  style's colors and position are used.
+- **Boundaries.** Start and end inputs (seconds or `m:ss`), nudge buttons
+  (±0.5 s and ±1 s) and **Set start/end to current time**. Rule: nudges and
+  "current time" are clamped to the video (`0` to its duration) and rounded
+  to milliseconds; order (`start < end`), the video's end and the clip
+  length limits are never fixed silently, they are shown as errors and block
+  saving.
+- **Captions.** **Generate captions** (when there are none) or
+  **Regenerate from transcript** (after a confirmation, because it replaces
+  every caption) call `POST /clips/{id}/captions/generate`; generating is
+  disabled while the boundaries have unsaved changes, because the backend
+  generates for the saved range. Each line has its text and start/end (clip
+  seconds) and can be removed; **Add caption** appends one after the last.
+  The browser checks the backend's rules: non-blank text of at most 1000
+  characters, lines within the style's `max_chars_per_line`,
+  `0 <= start < end <= clip length`, in order and not overlapping, and at
+  most 600 captions per clip.
+- **Saving.** **Save changes** sends `PATCH /clips/{id}`
+  (`{start_seconds, end_seconds}`) when the range changed, then
+  `PUT /clips/{id}/captions` when the captions changed (captions are checked
+  against the new length). Because the backend saves a range without
+  checking the captions, a new range is also blocked while any caption,
+  edited or not, would no longer fit in it; edit or remove those captions
+  first. If the range fails, the captions are not sent.
+  Backend errors are shown as returned, with the caption number for caption
+  errors (`details.index`, or the `loc` of a `validation_error`).
+  **Discard changes** returns to the last saved version.
+- **Unsaved changes.** The header shows "Unsaved changes" or "All changes
+  saved". Only while something really differs from the saved version
+  (`10` and `10.0` are the same), the page asks before following a link
+  (including Next.js links) and the browser asks before reloading or closing
+  the tab.
+- **Accessibility.** Every control is a native button, input, textarea or
+  checkbox with a label; nudge buttons have descriptive names ("Move the
+  start 0.5 seconds earlier"); errors are linked to their fields and
+  announced.
+
+Limitations: the browser Back/Forward buttons inside the app are not
+intercepted (Next.js offers no way to cancel them), so only links, reloads
+and closing the tab are guarded. The overlay previews on the source frame;
+the export may be reframed, so caption position and size are approximate,
+while the timing matches the rendered captions. Only the last saved version
+can be restored (no revision history or undo/redo). The clip model has one
+continuous source range, so there is no segment ordering; audio settings
+(beyond muting the preview with the player's own controls), extra text
+overlays and caption/branding presets other than the existing caption style
+are not part of the clip or export model yet and are not offered.
 
 ## Dashboard
 
