@@ -1,7 +1,10 @@
 -r requirements.txt
 
-# Development and CI tooling only; never needed at runtime.
-ruff>=0.12,<0.13
-pip-audit>=2.7,<3
-cyclonedx-bom>=6.0,<8
-PyYAML>=6.0,<7
+# Development and CI tooling only; never needed at runtime. Pinned exactly,
+# like the runtime requirements; Dependabot proposes updates weekly.
+ruff==0.12.8
+pip-audit==2.9.0
+cyclonedx-bom==7.0.0
+PyYAML==6.0.3
+pytest-cov==7.0.0
+mypy==1.18.2

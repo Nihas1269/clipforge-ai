@@ -245,9 +245,9 @@ def place_segments(
         end = min(offset + min(raw.end, duration), end_limit)
         if end <= start:
             continue
-        words = None
+        words: tuple[WordTiming, ...] | None = None
         if raw.words is not None:
-            words = []
+            timings: list[WordTiming] = []
             for word in raw.words:
                 if word.end < word.start:
                     raise InvalidTranscriptionResultError(
@@ -262,7 +262,7 @@ def place_segments(
                     continue
                 word_start = min(max(offset + word.start, start), end)
                 word_end = min(max(offset + word.end, start), end)
-                words.append(WordTiming(text, word_start, word_end))
-            words.sort(key=lambda word: (word.start, word.end))
+                timings.append(WordTiming(text, word_start, word_end))
+            words = tuple(sorted(timings, key=lambda word: (word.start, word.end)))
         placed.append(TranscriptionSegment(start, end, raw.text.strip(), words))
     return placed

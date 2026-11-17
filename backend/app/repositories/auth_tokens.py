@@ -8,8 +8,9 @@ two concurrent requests with the same token cannot both succeed.
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
 
 from app.core.security import (
@@ -136,16 +137,20 @@ def consume_token(
     if token is None:
         raise InvalidOneTimeTokenError()
 
-    # Conditional update: only one request can move used_at from NULL.
-    result = db.execute(
-        update(AuthToken)
-        .where(
-            AuthToken.id == token.id,
-            AuthToken.used_at.is_(None),
-            AuthToken.expires_at > now,
-        )
-        .values(used_at=now)
-        .execution_options(synchronize_session=False)
+    # Conditional update: only one request can move used_at from NULL. An
+    # UPDATE returns a CursorResult, which carries the rowcount.
+    result = cast(
+        CursorResult[Any],
+        db.execute(
+            update(AuthToken)
+            .where(
+                AuthToken.id == token.id,
+                AuthToken.used_at.is_(None),
+                AuthToken.expires_at > now,
+            )
+            .values(used_at=now)
+            .execution_options(synchronize_session=False)
+        ),
     )
     if result.rowcount != 1:
         db.rollback()

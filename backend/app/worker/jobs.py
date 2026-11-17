@@ -33,12 +33,12 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from celery import Task
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.signals import worker_ready
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, Executable, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -229,17 +229,24 @@ def _update_job(
     The check and the change are a single UPDATE, so they are atomic. Commits
     and returns whether the job was changed.
     """
-    result = db.execute(
+    changed = _execute_update(
+        db,
         update(ProcessingJob)
         .where(
             ProcessingJob.id == job_id,
             ProcessingJob.status.in_(sorted(from_statuses, key=lambda s: s.value)),
         )
         .values(**values)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session=False),
     )
     db.commit()
-    return result.rowcount == 1
+    return changed == 1
+
+
+def _execute_update(db: Session, statement: Executable) -> int:
+    """Execute an UPDATE statement and return the number of rows it changed."""
+    # UPDATE statements return a CursorResult, which carries the rowcount.
+    return cast(CursorResult[Any], db.execute(statement)).rowcount
 
 
 def _job_session() -> Session:
@@ -426,6 +433,9 @@ def _claim(job_id: uuid.UUID) -> tuple[JobContext, datetime | None, datetime] | 
         if not claimed:
             return None
         job = db.get(ProcessingJob, job_id)
+        if job is None:
+            # Deleted (with its video) right after it was claimed.
+            return None
         context = JobContext(
             job_id=job.id,
             job_type=JobType(job.job_type),
@@ -662,7 +672,7 @@ def cancel_job(
     )
     if user_id is not None:
         statement = statement.where(ProcessingJob.user_id == user_id)
-    cancelled = db.execute(statement).rowcount == 1
+    cancelled = _execute_update(db, statement) == 1
     db.commit()
     if cancelled:
         logger.info("job_cancelled", extra={"job_id": str(job_id)})
@@ -694,7 +704,8 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
     stale_video_ids = []
     for job_id, job_type, video_id in stale:
         # Re-checked atomically in case the job finished meanwhile.
-        result = db.execute(
+        changed = _execute_update(
+            db,
             update(ProcessingJob)
             .where(
                 ProcessingJob.id == job_id,
@@ -707,9 +718,9 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
                 finished_at=now,
                 active_key=None,
             )
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session=False),
         )
-        if result.rowcount == 1:
+        if changed == 1:
             failed += 1
             logger.warning("job_marked_stale", extra={"job_id": str(job_id)})
             if job_type == JobType.METADATA and video_id is not None:

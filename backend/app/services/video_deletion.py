@@ -2,8 +2,9 @@
 
 import logging
 import uuid
+from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
 from app.models.clip import Clip
@@ -70,10 +71,14 @@ def delete_video(
             .where(Transcript.video_id == video_id)
             .execution_options(synchronize_session=False)
         )
-        result = db.execute(
-            delete(Video)
-            .where(Video.id == video_id, Video.user_id == user_id)
-            .execution_options(synchronize_session=False)
+        # A DELETE returns a CursorResult, which carries the rowcount.
+        result = cast(
+            CursorResult[Any],
+            db.execute(
+                delete(Video)
+                .where(Video.id == video_id, Video.user_id == user_id)
+                .execution_options(synchronize_session=False)
+            ),
         )
         if result.rowcount != 1:
             # Deleted concurrently by another request.

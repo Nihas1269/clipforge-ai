@@ -454,6 +454,7 @@ class OpenAICompatibleTranscriptionProvider:
                         detected = detected or language_found
                         segments.extend(placed)
 
+        result_language: str | None
         if requested is not None and requested != UNDETERMINED_LANGUAGE:
             result_language = requested
         else:

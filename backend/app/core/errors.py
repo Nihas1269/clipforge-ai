@@ -309,6 +309,14 @@ async def validation_exception_handler(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register handlers that return errors in the standard shape."""
-    app.add_exception_handler(AppError, app_error_handler)
-    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    # Starlette types every handler as taking a plain Exception, although it
+    # only calls each one with the registered exception class.
+    app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(
+        StarletteHTTPException,
+        http_exception_handler,  # type: ignore[arg-type]
+    )
+    app.add_exception_handler(
+        RequestValidationError,
+        validation_exception_handler,  # type: ignore[arg-type]
+    )

@@ -25,7 +25,7 @@ with single byte-range support (206/416). Storage keys are never returned.
 
 import logging
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any, BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -216,7 +216,7 @@ def _delete_quietly(storage: StorageBackend, key: str) -> None:
         logger.exception("video_upload_cleanup_failed")
 
 
-async def _limited_body(request: Request, limit: int) -> AsyncIterator[bytes]:
+async def _limited_body(request: Request, limit: int) -> AsyncGenerator[bytes, None]:
     """Yield the request body, raising once more than `limit` bytes arrive."""
     received = 0
     while True:
@@ -371,7 +371,9 @@ def _store_upload(
         size_bytes = storage.save(key, fileobj, max_bytes=max_bytes)
     except StorageObjectTooLargeError:
         _delete_quietly(storage, key)
-        raise _too_large(user, max_bytes, **types) from None
+        raise _too_large(
+            user, max_bytes, extension=ext, content_type=declared_type
+        ) from None
     except Exception:
         logger.exception("video_upload_storage_failed", extra={"user_id": str(user.id)})
         _delete_quietly(storage, key)
