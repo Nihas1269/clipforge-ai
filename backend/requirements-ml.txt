@@ -1,0 +1,5 @@
+# Optional machine-learning dependencies, not needed for development or tests.
+# Install them only to use TRANSCRIPTION_PROVIDER=local_whisper:
+#   pip install -r requirements-ml.txt
+-r requirements.txt
+faster-whisper>=1.0,<2.0
