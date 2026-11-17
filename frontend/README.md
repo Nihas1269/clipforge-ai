@@ -108,15 +108,15 @@ current suite", so the setup file does not register hooks itself.
 ```text
 src/
   app/          Routes (App Router): root layout, landing page, /login,
-                /register, the protected /dashboard placeholder,
+                /register, the protected /dashboard,
                 /settings/profile, /videos/new and the /videos/[id]
                 placeholder, and the shared loading, error, and
                 not-found states
   components/   Reusable UI components (Button, Container, SiteHeader,
                 StatusMessage, TextField), the auth forms in auth/, the
                 session provider, protected layout and user menu in
-                session/, the profile forms in profile/, and the upload
-                form in videos/
+                session/, the profile forms in profile/, the upload
+                form in videos/, and the dashboard in dashboard/
   lib/          Shared constants, the API client (lib/api), and form
                 validation (lib/validation)
   test-utils/   Test helpers (a fake XMLHttpRequest)
@@ -238,3 +238,45 @@ let the backend store the video, and there is no endpoint yet to delete it.
 Uploads are not resumable; a failed upload must be started again. Progress
 measures bytes sent to the server, not the time the server then needs to
 validate and store the file.
+
+## Dashboard
+
+`/dashboard` (`src/components/dashboard/`) has three parts:
+
+- **Overview** (`GET /api/v1/dashboard`): quick-start links (upload a video,
+  create a project), video counts by status, generated clips, active
+  projects, storage used and total video length, and the five most recent
+  projects and videos.
+- **Projects** (`src/lib/api/projects.ts`): create, rename and archive (after
+  a confirmation dialog) projects; **Show videos** filters the video list to
+  a project. The project list is loaded once by `Dashboard` and shared with
+  the video list; the project shown for each video comes from the video
+  response itself, so project data is not duplicated.
+- **Your videos** (`listVideos`, `deleteVideo` and `moveVideoToProject` in
+  `src/lib/api/videos.ts`): a paginated list (20 per page) with file name
+  (linking to `/videos/{id}`), upload date, duration, size and a status badge
+  whose text label ("Uploaded", "Processing", "Ready", "Failed") carries the
+  meaning, plus status and project filters (including "Unassigned"), a
+  per-video project selector and a delete action.
+
+Behaviour:
+
+- **Polling.** While any listed video is `uploaded` or `processing`, the
+  current page is fetched again every 4 s with the same page and filters. A
+  poll is never sent while a request is still pending; polling pauses while
+  the browser tab is hidden (and refreshes as soon as it is shown again),
+  stops once every listed video is `ready` or `failed`, and its timer is
+  cleared on unmount.
+- **Delete.** The confirmation is a modal `alertdialog`: focus starts on
+  **Cancel**, Tab stays inside it, Escape cancels, and focus returns to the
+  opener (or to the list heading after a successful deletion). A video is
+  removed from the list only after the backend confirms; on failure it stays,
+  the error is announced, and the list is reloaded from the backend.
+- **States.** Each part has its own loading state, an error with a
+  **Try again** button, and an empty state; the empty video list links to
+  `/videos/new`.
+
+Limitations: up to 50 active projects are loaded at a time; with more, the
+project filter and selector only offer the current page of projects.
+Credits are not tracked yet, so only usage is shown. There is no view of
+archived projects (the API can list and restore them).

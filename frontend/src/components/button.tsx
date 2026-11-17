@@ -1,8 +1,9 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentProps } from "react";
 
 export type ButtonVariant = "primary" | "secondary";
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+/** Includes `ref`, which React 19 passes to function components as a prop. */
+export interface ButtonProps extends ComponentProps<"button"> {
   variant?: ButtonVariant;
 }
 

@@ -19,6 +19,20 @@ export const UPLOAD_RESPONSE_TIMEOUT_MS = 300_000;
 
 export type VideoStatus = "uploaded" | "processing" | "ready" | "failed";
 
+export const VIDEO_STATUSES: readonly VideoStatus[] = ["uploaded", "processing", "ready", "failed"];
+
+/** Statuses that are still changing; the dashboard polls while a video is in one. */
+export const ACTIVE_VIDEO_STATUSES: readonly VideoStatus[] = ["uploaded", "processing"];
+
+export const DEFAULT_VIDEO_PAGE_SIZE = 20;
+
+/** The project a video is filed under, as embedded by the backend. */
+export interface VideoProjectRef {
+  id: string;
+  name: string;
+  archived: boolean;
+}
+
 /** A video as returned by the backend (`VideoRead`). */
 export interface Video {
   id: string;
@@ -34,6 +48,25 @@ export interface Video {
   fps: number | null;
   created_at: string;
   updated_at: string;
+  /** `null` while the video is in no project. */
+  project?: VideoProjectRef | null;
+}
+
+/** One page of `GET /api/v1/videos`. */
+export interface VideoList {
+  items: Video[];
+  /** All videos matching the filters, not just this page. */
+  total: number;
+}
+
+export interface ListVideosParams {
+  limit?: number;
+  offset?: number;
+  status?: VideoStatus;
+  /** Only the videos in this project. */
+  projectId?: string;
+  /** Only videos in no project; excludes `projectId`. */
+  unassigned?: boolean;
 }
 
 /** The limits `POST /api/v1/videos` enforces. */
@@ -99,6 +132,74 @@ function isVideo(value: unknown): value is Video {
     typeof (value as { id?: unknown }).id === "string" &&
     (value as { id: string }).id.length > 0
   );
+}
+
+function isVideoStatus(value: unknown): value is VideoStatus {
+  return typeof value === "string" && (VIDEO_STATUSES as readonly string[]).includes(value);
+}
+
+/** The fields the dashboard relies on, so a malformed response is an error rather than a crash. */
+export function isListedVideo(value: unknown): value is Video {
+  if (!isVideo(value)) {
+    return false;
+  }
+  const video = value as unknown as Record<string, unknown>;
+  return (
+    typeof video.original_filename === "string" &&
+    typeof video.size_bytes === "number" &&
+    typeof video.created_at === "string" &&
+    (video.duration_seconds === null || typeof video.duration_seconds === "number") &&
+    isVideoStatus(video.status)
+  );
+}
+
+function isVideoList(value: unknown): value is VideoList {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const list = value as Record<string, unknown>;
+  return Array.isArray(list.items) && list.items.every(isListedVideo) && typeof list.total === "number";
+}
+
+function videoPath(id: string): string {
+  return `${VIDEOS_PATH}/${encodeURIComponent(id)}`;
+}
+
+/** One page of the current user's videos, newest first. */
+export async function listVideos(params: ListVideosParams = {}): Promise<VideoList> {
+  const query = new URLSearchParams();
+  query.set("limit", String(params.limit ?? DEFAULT_VIDEO_PAGE_SIZE));
+  query.set("offset", String(params.offset ?? 0));
+  if (params.status) {
+    query.set("status", params.status);
+  }
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
+  } else if (params.unassigned) {
+    query.set("unassigned", "true");
+  }
+  const list = await apiRequest<unknown>(`${VIDEOS_PATH}?${query.toString()}`);
+  if (!isVideoList(list)) {
+    throw new ApiError(200, "invalid_response", GENERIC_ERROR_MESSAGE);
+  }
+  return list;
+}
+
+/** Deletes the video and its files. Resolves only once the backend confirms (`204`). */
+export async function deleteVideo(id: string): Promise<void> {
+  await apiRequest<unknown>(videoPath(id), { method: "DELETE" });
+}
+
+/** Moves the video into a project, or makes it unassigned with `null`. */
+export async function moveVideoToProject(id: string, projectId: string | null): Promise<Video> {
+  const video = await apiRequest<unknown>(videoPath(id), {
+    method: "PATCH",
+    body: { project_id: projectId },
+  });
+  if (!isListedVideo(video)) {
+    throw new ApiError(200, "invalid_response", GENERIC_ERROR_MESSAGE);
+  }
+  return video;
 }
 
 /** The backend's upload limits, so the browser can check a file before sending it. */

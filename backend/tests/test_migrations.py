@@ -1005,6 +1005,106 @@ def test_downgrade_of_caption_migration_keeps_clips(database_url, engine):
     assert "clip_captions" in inspect(engine).get_table_names()
 
 
+def test_upgrade_creates_project_tables(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {column["name"]: column for column in inspector.get_columns("projects")}
+    assert set(columns) == {
+        "id",
+        "user_id",
+        "name",
+        "archived_at",
+        "created_at",
+        "updated_at",
+    }
+    assert columns["archived_at"]["nullable"] is True
+    for name in ("user_id", "name", "created_at", "updated_at"):
+        assert columns[name]["nullable"] is False, name
+    indexes = {index["name"]: index for index in inspector.get_indexes("projects")}
+    assert indexes["ix_projects_user_id"]["column_names"] == ["user_id"]
+    (foreign_key,) = inspector.get_foreign_keys("projects")
+    assert foreign_key["referred_table"] == "users"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+    columns = {
+        column["name"]: column for column in inspector.get_columns("project_videos")
+    }
+    assert set(columns) == {"video_id", "project_id", "created_at"}
+    assert inspector.get_pk_constraint("project_videos")["constrained_columns"] == [
+        "video_id"
+    ]
+    referred = {
+        fk["referred_table"]: fk["options"].get("ondelete")
+        for fk in inspector.get_foreign_keys("project_videos")
+    }
+    assert referred == {"videos": "CASCADE", "projects": "CASCADE"}
+
+
+def test_existing_videos_stay_unassigned_and_keep_one_project(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "0010")
+    user_id = uuid.uuid4().hex
+    video_id = uuid.uuid4().hex
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": video_id, "user_id": user_id})
+
+    command.upgrade(config, "head")
+
+    insert_project = text(
+        "INSERT INTO projects (id, user_id, name) VALUES (:id, :user_id, 'P')"
+    )
+    insert_link = text(
+        "INSERT INTO project_videos (video_id, project_id) "
+        "VALUES (:video_id, :project_id)"
+    )
+    first, second = uuid.uuid4().hex, uuid.uuid4().hex
+    with engine.begin() as connection:
+        assert connection.execute(text("SELECT COUNT(*) FROM videos")).scalar() == 1
+        assert (
+            connection.execute(text("SELECT COUNT(*) FROM project_videos")).scalar()
+            == 0
+        )
+        connection.execute(insert_project, {"id": first, "user_id": user_id})
+        connection.execute(insert_project, {"id": second, "user_id": user_id})
+        connection.execute(insert_link, {"video_id": video_id, "project_id": first})
+        row = connection.execute(
+            text("SELECT archived_at, created_at, updated_at FROM projects")
+        ).first()
+    assert row.archived_at is None
+    assert row.created_at is not None
+    assert row.updated_at is not None
+
+    # A video is in at most one project.
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                insert_link, {"video_id": video_id, "project_id": second}
+            )
+
+
+def test_downgrade_of_projects_migration_keeps_videos_and_clips(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0010")
+
+    inspector = inspect(engine)
+    table_names = inspector.get_table_names()
+    assert "projects" not in table_names
+    assert "project_videos" not in table_names
+    assert "videos" in table_names
+    assert "subscriptions" in table_names
+    # Only the projects migration is rolled back; caption tables stay.
+    assert "clip_captions" in table_names
+    assert "caption_styles" in table_names
+    columns = {column["name"] for column in inspector.get_columns("clips")}
+    assert "detector_version" in columns
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

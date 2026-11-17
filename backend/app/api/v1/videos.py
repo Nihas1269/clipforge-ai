@@ -1,4 +1,4 @@
-"""Video upload, listing, detail, deletion and media access.
+"""Video upload, listing, detail, project assignment, deletion and media access.
 
 Every endpoint requires authentication and only ever sees the current user's
 videos; another user's video gets the same 404 as a missing one (see
@@ -43,8 +43,13 @@ from app.core.request_id import get_request_id
 from app.database import get_db
 from app.models.user import User
 from app.models.video import Video, VideoStatus
+from app.repositories.projects import (
+    ProjectArchivedError,
+    get_project_for_user,
+    set_video_project,
+)
 from app.repositories.videos import list_videos_for_user
-from app.schemas.video import UploadLimits, VideoList, VideoRead
+from app.schemas.video import UploadLimits, VideoList, VideoRead, VideoUpdate
 from app.services.http_range import RangeNotSatisfiableError, parse_range_header
 from app.services.video_deletion import VideoNotFoundError, delete_video
 from app.services.video_upload import (
@@ -505,18 +510,84 @@ def list_videos(
     limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0, le=MAX_OFFSET),
     status_filter: VideoStatus | None = Query(None, alias="status"),
+    project_id: uuid.UUID | None = Query(None),
+    unassigned: bool = Query(False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> VideoList:
-    """List the current user's videos, newest first, optionally by status."""
+    """List the current user's videos, newest first.
+
+    Optionally filtered by status and by project (`project_id`) or to videos
+    in no project (`unassigned=true`); the two project filters exclude each
+    other. Another user's project gets the same 404 as a missing one.
+    """
+    if project_id is not None and unassigned:
+        raise AppError(
+            422,
+            "invalid_filter",
+            "Use either project_id or unassigned, not both.",
+        )
+    if project_id is not None and get_project_for_user(db, project_id, user.id) is None:
+        raise AppError(status.HTTP_404_NOT_FOUND, "not_found", "Project not found.")
     videos, total = list_videos_for_user(
-        db, user.id, limit=limit, offset=offset, status=status_filter
+        db,
+        user.id,
+        limit=limit,
+        offset=offset,
+        status=status_filter,
+        project_id=project_id,
+        unassigned=unassigned,
     )
     return VideoList(items=[VideoRead.model_validate(v) for v in videos], total=total)
 
 
 @router.get("/{video_id}", response_model=VideoRead)
 def read_video(video: Video = Depends(get_owned_video)) -> VideoRead:
+    return VideoRead.model_validate(video)
+
+
+@router.patch("/{video_id}", response_model=VideoRead)
+def update_video(
+    payload: VideoUpdate,
+    video: Video = Depends(get_owned_video),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> VideoRead:
+    """Move the video to one of the user's projects, or unassign it (`null`).
+
+    Another user's project gets the same 404 as a missing one; an archived
+    project is `409 project_archived`.
+    """
+    project = None
+    if payload.project_id is not None:
+        project = get_project_for_user(db, payload.project_id, user.id)
+        if project is None:
+            raise AppError(
+                status.HTTP_404_NOT_FOUND, "project_not_found", "Project not found."
+            )
+    video_id = video.id
+    try:
+        set_video_project(db, video, project)
+    except ProjectArchivedError:
+        raise AppError(
+            status.HTTP_409_CONFLICT,
+            "project_archived",
+            "Videos cannot be moved into an archived project.",
+        ) from None
+    except Exception as exc:
+        logger.error(
+            "video_project_change_failed",
+            extra={
+                "user_id": str(user.id),
+                "video_id": str(video_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise AppError(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "update_failed",
+            "The video could not be updated.",
+        ) from None
     return VideoRead.model_validate(video)
 
 
