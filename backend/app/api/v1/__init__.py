@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, clips, jobs, transcripts, users, videos
+from app.api.v1 import auth, captions, clips, jobs, transcripts, users, videos
 
 API_V1_PREFIX = "/api/v1"
 
@@ -10,6 +10,7 @@ api_router.include_router(users.router)
 api_router.include_router(videos.router)
 api_router.include_router(transcripts.router)
 api_router.include_router(clips.router)
+api_router.include_router(captions.router)
 api_router.include_router(jobs.router)
 
 

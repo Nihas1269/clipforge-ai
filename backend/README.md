@@ -112,6 +112,7 @@ Copy-Item .env.example .env
 | `CLIP_MAX_CLIPS`              | `10`                     | Most clips suggested per video (1-50).                       |
 | `CLIP_KEYWORDS`               | built-in list            | Comma-separated words or phrases the heuristic clip detector rewards (see Clips below). |
 | `CLIP_DETECTOR`               | `heuristic`              | Detector run by the clip detection job: `heuristic` or `llm` (falls back to `heuristic` when unconfigured or failing; see Clips below). |
+| `CAPTION_FONTS`               | `Arial,Roboto,Open Sans,Montserrat,Inter,Bebas Neue` | Comma-separated font allowlist for captions; the first is the default (see Captions below). |
 | `LLM_PROVIDER`                | unset                    | `openai_compatible` or `anthropic`. Required for `CLIP_DETECTOR=llm`. |
 | `LLM_API_BASE_URL`            | unset                    | API base URL including the version path (e.g. `.../v1`).     |
 | `LLM_API_KEY`                 | unset                    | API key. Required unless the URL is a loopback host.         |
@@ -836,6 +837,84 @@ range or title of a clip that is still `suggested` does not keep it: accept
 it, or the next detection replaces it. Manual clips may overlap other clips.
 The row lock has no effect on SQLite (tests), only on PostgreSQL.
 
+## Captions
+
+**Models** (`app/models/caption.py`, migration `0010`):
+
+- `clip_captions`: `id`, `clip_id` (`ON DELETE CASCADE`), `index`,
+  `start_seconds`, `end_seconds`, `text`. Times are seconds **relative to
+  the clip start**; text lines are separated by `\n`. A unique constraint on
+  `(clip_id, index)` keeps the order; `CHECK` constraints require
+  `index >= 0`, `start_seconds >= 0` and `end_seconds > start_seconds`.
+- `caption_styles` (at most one per clip, unique index on `clip_id`):
+  `preset` (`classic`, `bold`, `karaoke`, `minimal`), `font_family`,
+  `font_size` (16-160), `primary_color`, `outline_color` (`#RRGGBBAA`),
+  `position` (`bottom`, `middle`, `top`), `uppercase`, `max_chars_per_line`
+  (10-80), `created_at`, `updated_at`.
+
+Deleting a clip (or its video, or replacing suggested clips on re-detection)
+deletes its captions and style.
+
+**Generation** (`app/captions/generate.py`, pure functions): words whose
+midpoint lies in the clip are taken from the transcript's word timings,
+clamped to the clip and grouped into lines of at most `max_chars_per_line`
+characters; each line is one caption from its first word's start to its last
+word's end, and a segment boundary always ends a line. A segment without
+(valid) word timings becomes **one** caption over the part of the segment
+inside the clip, its whole text wrapped to the line length: word timing is
+never invented. Overlapping captions are cut (or merged when they start
+together); every caption lasts at least 10 ms and lies within the clip.
+
+**ASS output** (`app/captions/ass.py`): `render_ass(captions, style, width,
+height, time_offset=0)` returns `[Script Info]` (PlayRes = output size),
+`[V4+ Styles]` (one `Default` style) and `[Events]` (`Dialogue` lines with
+`H:MM:SS.cc` times). Hex colors become `&HAABBGGRR` with the alpha inverted
+(CSS `FF` = opaque, ASS `00` = opaque). Font size, outline, shadow and
+margins are given for a 1080-pixel shorter side and scaled. Text is cleaned,
+upper-cased if the style says so and wrapped to `max_chars_per_line`; `{`,
+`}` and `\` are replaced with full-width look-alikes and line breaks are
+written as `\N`, so caption text cannot inject ASS override tags or new
+events. Pass `time_offset` (the clip start) only when burning into the uncut
+source video.
+
+**Endpoints** (all require authentication; another user's clip is `404`):
+
+- `POST /clips/{id}/captions/generate` regenerates the captions from the
+  transcript with the style's `max_chars_per_line`. It **replaces all
+  captions, including user edits** (`409 transcript_required` without a
+  transcript). Running it twice gives the same captions, never duplicates.
+- `GET /clips/{id}/captions` lists them in order.
+- `PUT /clips/{id}/captions` `{captions: [...]}` replaces the list (at most
+  600). Times are finite numbers, rounded to milliseconds; text has control
+  characters removed and whitespace collapsed (1-1000 characters). Errors
+  (`422`, with the caption `index` in `details`): `caption_outside_clip`
+  (must satisfy `0 <= start < end <= clip length`, 1 ms tolerance at the
+  end), `invalid_caption_timing` (empty after rounding), `captions_overlap`
+  (captions must be in time order; touching is allowed),
+  `caption_line_too_long` (a line exceeds the style's `max_chars_per_line`).
+- `GET /clips/{id}/caption-style` returns the stored style, or the classic
+  default with `is_default: true`; `allowed_fonts` lists `CAPTION_FONTS`.
+- `PUT /clips/{id}/caption-style` replaces the style; omitted fields take the
+  preset's defaults. Enums, ranges, hex colors (`#RRGGBB` or `#RRGGBBAA`
+  only) and unknown fields are `422 validation_error`; a font outside
+  `CAPTION_FONTS` (matched case-insensitively) is `422 font_not_allowed`; a
+  text color less than 50% opaque (alpha below `80`) is `422
+  caption_color_too_transparent`.
+
+Log events: `captions_generated`, `captions_generation_rejected`,
+`captions_updated`, `caption_style_updated` (ids, counts and preset only,
+never caption text).
+
+Limitations: changing a clip's range does not move its captions; regenerate
+them. Changing `max_chars_per_line` does not re-check stored captions; the
+ASS renderer re-wraps longer lines. The segment fallback keeps the whole text
+of a segment that only partly overlaps the clip. The `karaoke` preset is a
+look (colors, weight); word-by-word highlighting is not rendered because
+captions do not store word timings. Fonts in `CAPTION_FONTS` must be
+installed where FFmpeg/libass renders, otherwise libass substitutes another
+font. No endpoint serves the ASS file yet; the render job will use
+`render_ass`.
+
 ## Billing: plans, subscriptions and usage
 
 **Plans** (`app/billing/plans.py`) are defined in code: `free` and `pro`.
@@ -1374,6 +1453,11 @@ root and is not versioned.
 | POST   | `/api/v1/videos/{id}/clips` | `{start_seconds, end_seconds, title?}` | `201` manual clip; `401`; `404`; `409` `video_not_ready`; `422` invalid range, length, title or field |
 | PATCH  | `/api/v1/clips/{clip_id}` | `{start_seconds?, end_seconds?, title?, status?}` | `200` clip; `401`; `404` unknown or another user's clip; `409` `invalid_status_transition` / `video_not_ready`; `422` |
 | DELETE | `/api/v1/clips/{clip_id}` | —                                  | `204`; `401`; `404` |
+| POST   | `/api/v1/clips/{clip_id}/captions/generate` | —              | `200` `{clip_id, items, total}`; `401`; `404`; `409` `transcript_required` |
+| GET    | `/api/v1/clips/{clip_id}/captions` | —                         | `200` `{clip_id, items: [{id, index, start_seconds, end_seconds, text}], total}`; `401`; `404` |
+| PUT    | `/api/v1/clips/{clip_id}/captions` | `{captions: [{start_seconds, end_seconds, text}]}` | `200` caption list; `401`; `404`; `422` invalid times, order, overlap, text or line length |
+| GET    | `/api/v1/clips/{clip_id}/caption-style` | —                    | `200` style (`is_default`, `allowed_fonts`); `401`; `404` |
+| PUT    | `/api/v1/clips/{clip_id}/caption-style` | `{preset, font_family?, font_size?, primary_color?, outline_color?, position?, uppercase?, max_chars_per_line?}` | `200` style; `401`; `404`; `422` invalid value, `font_not_allowed`, `caption_color_too_transparent` |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an

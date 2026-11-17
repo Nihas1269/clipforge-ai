@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.caption import CaptionStyle, ClipCaption
     from app.models.video import Video
 
 TITLE_MAX_LENGTH = 200
@@ -137,6 +138,18 @@ class Clip(Base):
     )
 
     video: Mapped["Video"] = relationship(back_populates="clips")
+    # Deleted with the clip; not passive, so the ORM also deletes them on
+    # databases that do not enforce foreign keys.
+    captions: Mapped[list["ClipCaption"]] = relationship(
+        back_populates="clip",
+        cascade="all, delete-orphan",
+        order_by="ClipCaption.index",
+    )
+    caption_style: Mapped["CaptionStyle | None"] = relationship(
+        back_populates="clip",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
     def __repr__(self) -> str:
         # No title or reason: they are derived from the user's content.
