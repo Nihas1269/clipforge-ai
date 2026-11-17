@@ -4,12 +4,14 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.video import VideoStatus
+from app.schemas.project import ProjectRef
 
 
 class VideoRead(BaseModel):
     """A video as returned by the API.
 
-    The storage key is internal and is deliberately not exposed.
+    The storage key is internal and is deliberately not exposed. `project` is
+    null for an unassigned video.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -27,6 +29,16 @@ class VideoRead(BaseModel):
     fps: float | None = None
     created_at: datetime
     updated_at: datetime
+    project: ProjectRef | None = None
+
+
+class VideoUpdate(BaseModel):
+    """Body of `PATCH /videos/{id}`: move the video to a project, or to
+    "unassigned" with `null`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: uuid.UUID | None
 
 
 class UploadLimits(BaseModel):

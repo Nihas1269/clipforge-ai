@@ -23,6 +23,7 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.models.clip import Clip
+    from app.models.project import Project
     from app.models.transcript import Transcript
     from app.models.user import User
 
@@ -133,6 +134,11 @@ class Video(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="Clip.start_seconds",
+    )
+    # Read-only: change it with app.repositories.projects.set_video_project.
+    # None means the video is unassigned.
+    project: Mapped["Project | None"] = relationship(
+        secondary="project_videos", uselist=False, viewonly=True
     )
 
     def __repr__(self) -> str:

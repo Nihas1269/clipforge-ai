@@ -15,6 +15,7 @@ from app.models.billing import (
 from app.models.caption import CaptionStyle, ClipCaption
 from app.models.clip import Clip, ClipSource, ClipStatus
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
+from app.models.project import Project, ProjectVideo
 from app.models.storage_deletion import PendingStorageDeletion
 from app.models.transcript import Transcript, TranscriptSegment
 from app.models.user import User
@@ -34,6 +35,8 @@ __all__ = [
     "PaymentStatus",
     "PendingStorageDeletion",
     "ProcessingJob",
+    "Project",
+    "ProjectVideo",
     "Subscription",
     "SubscriptionStatus",
     "Transcript",

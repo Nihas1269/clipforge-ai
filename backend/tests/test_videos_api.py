@@ -66,6 +66,7 @@ VIDEO_FIELDS = {
     "fps",
     "created_at",
     "updated_at",
+    "project",
 }
 
 

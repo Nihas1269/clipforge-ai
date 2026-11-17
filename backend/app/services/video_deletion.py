@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.clip import Clip
 from app.models.processing_job import ProcessingJob
+from app.models.project import ProjectVideo
 from app.models.storage_deletion import PendingStorageDeletion
 from app.models.transcript import Transcript, TranscriptSegment
 from app.models.video import Video
@@ -26,7 +27,8 @@ class VideoNotFoundError(LookupError):
 def delete_video(
     db: Session, storage: StorageBackend, video_id: uuid.UUID, user_id: uuid.UUID
 ) -> bool:
-    """Delete the user's video, its jobs, transcript, clips and stored file.
+    """Delete the user's video, its jobs, transcript, clips, project link and
+    stored file.
 
     In one transaction the video row (only if it belongs to `user_id`), its
     jobs, clips and transcript are deleted and a PendingStorageDeletion for the file is recorded.
@@ -60,6 +62,11 @@ def delete_video(
         db.execute(
             delete(Clip)
             .where(Clip.video_id == video_id)
+            .execution_options(synchronize_session=False)
+        )
+        db.execute(
+            delete(ProjectVideo)
+            .where(ProjectVideo.video_id == video_id)
             .execution_options(synchronize_session=False)
         )
         transcript_ids = select(Transcript.id).where(Transcript.video_id == video_id)

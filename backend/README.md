@@ -1102,6 +1102,48 @@ not set one yet), not the video's `content_type`. Multipart (`multipart/
 byteranges`) responses are not supported. A concurrent retry run and a
 request can both delete the same object, which is harmless.
 
+## Projects and the dashboard
+
+`app/models/project.py` defines `projects` (`id`, `user_id` with `ON DELETE
+CASCADE`, `name` of 1-100 characters, `archived_at`, `created_at`,
+`updated_at`) and `project_videos` (`video_id` primary key, so a video is in
+at most one project; `project_id`; both `ON DELETE CASCADE`), migration
+`0011`. A video without a `project_videos` row is **unassigned**; existing
+videos start out unassigned. Projects are archived, never deleted, and
+there is no sharing between users.
+
+- `GET /projects` (`limit` 1-100, default 20; `offset`; `archived=true` for
+  archived projects) lists the user's projects, most recently updated first
+  (moving a video in counts as an update), each with `video_count` and
+  `status_counts` (`uploaded`, `processing`, `ready`, `failed`).
+- `POST /projects` `{name}` creates one; `GET /projects/{id}` reads one;
+  `PATCH /projects/{id}` `{name?, archived?}` renames it and/or archives
+  (`true`) or restores (`false`) it. Names are trimmed; blank names, names
+  over 100 characters and control characters are `422`, as are unknown
+  fields and `null` values.
+- `PATCH /videos/{id}` `{project_id}` moves a video into a project, or makes
+  it unassigned with `null`. An archived project is `409 project_archived`;
+  archiving keeps a project's videos where they are.
+- `GET /videos` also accepts `project_id` (another user's project is `404`)
+  or `unassigned=true` (both together are `422 invalid_filter`), combined with
+  `status` and pagination. `VideoRead` includes `project` (`{id, name,
+  archived}` or `null`) in the list, detail, upload and update responses.
+- `GET /dashboard` returns the user's video totals by status, the number of
+  generated clips, active/archived project counts, usage (`storage_bytes`,
+  `video_seconds`) and the 5 most recent projects and videos.
+
+Ownership is enforced in `app/repositories/projects.py` and the endpoints:
+every query is scoped to the authenticated user, and another user's project
+or video gets the same `404` as a missing one. Log events
+(`project_created`, `project_updated`, `video_project_changed`) carry ids
+only, never project names or file names.
+
+Limitations: the database does not itself prevent linking a video to another
+user's project (only the API does, and counts and lists ignore such links).
+Credits are not tracked yet (the credit ledger is CF-049), so the dashboard
+reports usage only. Archived projects can be restored through the API, but the
+dashboard has no archived-projects view yet.
+
 ## Background jobs
 
 Long-running work (metadata extraction, transcription, clip detection,
@@ -1439,9 +1481,15 @@ root and is not versioned.
 | POST   | `/api/v1/auth/password-reset/confirm` | `{token, new_password}` | `204`, clears the cookie; `400` `invalid_token`; `422`; `429`          |
 | GET    | `/api/v1/videos/upload-limits` | —                             | `200` `{max_upload_size_bytes, allowed_extensions, allowed_content_types}`; `401` |
 | POST   | `/api/v1/videos`        | multipart, one file part `file`      | `201` `VideoRead`; `400` malformed multipart; `401`; `413` too large; `415` type not allowed or mismatched; `422` missing or empty file; `500`/`503` storage or database failure |
-| GET    | `/api/v1/videos`        | — (query `limit` 1-100, default 20; `offset`; `status`) | `200` `{items: [VideoRead], total}`, newest first; `401`; `422` invalid parameter |
+| GET    | `/api/v1/videos`        | — (query `limit` 1-100, default 20; `offset`; `status`; `project_id` or `unassigned`) | `200` `{items: [VideoRead], total}`, newest first; `401`; `404` another user's project; `422` invalid parameter |
 | GET    | `/api/v1/videos/{id}`   | —                                    | `200` `VideoRead`; `401`; `404` unknown or another user's video; `422` invalid id |
+| PATCH  | `/api/v1/videos/{id}`   | `{project_id}` (`null` to unassign)  | `200` `VideoRead`; `401`; `403` untrusted origin (cookie auth); `404` (also `project_not_found`); `409` `project_archived`; `422` |
 | DELETE | `/api/v1/videos/{id}`   | —                                    | `204`; `401`; `403` untrusted origin (cookie auth); `404`; `500` database failure (nothing deleted); `503` storage misconfigured |
+| GET    | `/api/v1/projects`      | — (query `limit` 1-100, default 20; `offset`; `archived`) | `200` `{items: [ProjectRead], total}`, most recently updated first; `401`; `422` |
+| POST   | `/api/v1/projects`      | `{name}`                             | `201` `ProjectRead`; `401`; `403` untrusted origin (cookie auth); `422` invalid name |
+| GET    | `/api/v1/projects/{id}` | —                                    | `200` `ProjectRead`; `401`; `404` unknown or another user's project |
+| PATCH  | `/api/v1/projects/{id}` | `{name?, archived?}`                 | `200` `ProjectRead`; `401`; `403` untrusted origin (cookie auth); `404`; `422` |
+| GET    | `/api/v1/dashboard`     | —                                    | `200` video totals, clip count, project counts, usage, recent projects and videos; `401` |
 | GET    | `/api/v1/videos/{id}/media` | — (optional `Range: bytes=...`)  | `307` to a short-lived URL (S3), or `200` whole file / `206` byte range; `401`; `404` (also `media_not_found`); `416` invalid or unsatisfiable range; `503` storage failure |
 | POST   | `/api/v1/videos/{id}/transcription` | `{language?}` (optional) | `202` `{job_id, status}`; `401`; `403` untrusted origin (cookie auth); `404`; `409` `video_not_ready` / `transcription_in_progress`; `422` invalid language or field; `503` job could not be queued |
 | GET    | `/api/v1/videos/{id}/transcript` | —                           | `200` transcript with segments; `401`; `404` (also `transcript_not_found`) |
