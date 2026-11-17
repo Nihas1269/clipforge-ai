@@ -199,6 +199,57 @@ class Settings(BaseSettings):
         default_factory=lambda: list(DEFAULT_CLIP_KEYWORDS)
     )
 
+    # Clip detector: "heuristic" (default, offline) or "llm". A plain string so
+    # an unknown name does not stop the app from starting; get_clip_detector()
+    # logs a warning and uses the heuristic detector instead. "llm" falls back
+    # to the heuristic detector when it is unconfigured or fails.
+    CLIP_DETECTOR: str = "heuristic"
+    # LLM provider for CLIP_DETECTOR=llm: "openai_compatible" (chat
+    # completions) or "anthropic" (Messages API). See docs/setup/llm.md.
+    # Optional here so the app starts without them.
+    LLM_PROVIDER: str | None = None
+    LLM_API_BASE_URL: str | None = None
+    LLM_API_KEY: SecretStr | None = None
+    LLM_MODEL: str | None = None
+    # Overall deadline of one LLM request, checked as the response arrives;
+    # each connect/read also times out after at most this long, so a stalled
+    # read ends within one more timeout period.
+    LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
+    # Longest user prompt (in characters) sent in one request; longer
+    # transcripts are split into several requests.
+    LLM_MAX_PROMPT_CHARS: int = Field(default=24000, ge=2000, le=400000)
+    # Most tokens the model may generate per request.
+    LLM_MAX_OUTPUT_TOKENS: int = Field(default=2048, ge=256, le=16384)
+    # Optional prices in USD per million tokens, used only to log an
+    # estimated cost per detection run.
+    LLM_INPUT_COST_PER_MILLION_TOKENS: float | None = Field(default=None, ge=0)
+    LLM_OUTPUT_COST_PER_MILLION_TOKENS: float | None = Field(default=None, ge=0)
+
+    @field_validator("CLIP_DETECTOR", mode="before")
+    @classmethod
+    def _normalize_clip_detector(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower() or "heuristic"
+        return value
+
+    @field_validator(
+        "LLM_PROVIDER",
+        "LLM_API_BASE_URL",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "LLM_INPUT_COST_PER_MILLION_TOKENS",
+        "LLM_OUTPUT_COST_PER_MILLION_TOKENS",
+        mode="before",
+    )
+    @classmethod
+    def _blank_llm_setting_is_unset(cls, value: Any, info: ValidationInfo) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+            if info.field_name == "LLM_PROVIDER":
+                value = value.lower()
+            return value or None
+        return value
+
     @field_validator("CLIP_KEYWORDS", mode="before")
     @classmethod
     def _split_clip_keywords(cls, value: Any) -> Any:

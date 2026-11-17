@@ -111,6 +111,15 @@ Copy-Item .env.example .env
 | `CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS` | `15` / `90`    | Shortest / longest suggested clip (at most 600; min must not exceed max). |
 | `CLIP_MAX_CLIPS`              | `10`                     | Most clips suggested per video (1-50).                       |
 | `CLIP_KEYWORDS`               | built-in list            | Comma-separated words or phrases the heuristic clip detector rewards (see Clips below). |
+| `CLIP_DETECTOR`               | `heuristic`              | `heuristic` or `llm` (falls back to `heuristic` when unconfigured or failing; see Clips below). |
+| `LLM_PROVIDER`                | unset                    | `openai_compatible` or `anthropic`. Required for `CLIP_DETECTOR=llm`. |
+| `LLM_API_BASE_URL`            | unset                    | API base URL including the version path (e.g. `.../v1`).     |
+| `LLM_API_KEY`                 | unset                    | API key. Required unless the URL is a loopback host.         |
+| `LLM_MODEL`                   | unset                    | Model name.                                                  |
+| `LLM_TIMEOUT_SECONDS`         | `60`                     | Overall deadline of one LLM request (at most 600; see Clips below). |
+| `LLM_MAX_PROMPT_CHARS`        | `24000`                  | Longest prompt per request (2000-400000); longer transcripts are chunked. |
+| `LLM_MAX_OUTPUT_TOKENS`       | `2048`                   | Most tokens generated per request (256-16384).               |
+| `LLM_INPUT_COST_PER_MILLION_TOKENS` / `LLM_OUTPUT_COST_PER_MILLION_TOKENS` | unset | Optional USD prices, used only to log an estimated cost. |
 
 Invalid values (for example an unknown `APP_ENV` or `STORAGE_BACKEND`) stop
 the application at startup with a validation error.
@@ -666,8 +675,71 @@ explicitly).
   are the first words of the window's text; reasons list the signal counts.
   Segments with invalid times or ending past the video are ignored. Logs
   `clip_detection_completed` and `clip_candidates_validated` with counts only.
+- `llm.py` — `LLMClipDetector`, optional, built on the `LLMClient` protocol
+  (`complete_json(system, user) -> str`) from `llm_clients.py`, which has two
+  `httpx` adapters (no vendor SDKs): `OpenAICompatibleLLMClient`
+  (`POST <LLM_API_BASE_URL>/chat/completions`, bearer key) and
+  `AnthropicLLMClient` (`POST <LLM_API_BASE_URL>/messages`, `x-api-key`,
+  `anthropic-version: 2023-06-01`). The prompt lives in `llm_prompt.py`
+  (`PROMPT_VERSION`, currently `clip-detect-v1`). Setup: `docs/setup/llm.md`.
+- `get_clip_detector()` (in `app/clips/__init__.py`) returns the detector
+  named by `CLIP_DETECTOR`. An unknown name logs `clip_detector_unknown` and
+  gives the heuristic detector; it never raises for configuration problems.
+
+**LLM detector details.**
+
+- *Prompt and untrusted text.* Only segment times and text are sent (no file
+  names or ids). The transcript goes in the user message, never the system
+  prompt, one JSON object per segment between `<transcript>` tags, with `<`
+  and `>` escaped so the text cannot close the block; the system prompt tells
+  the model to treat it as data. Control characters are removed.
+- *Chunking.* Segments are sent whole, in time order, with their absolute
+  video timestamps, in consecutive non-overlapping chunks whose prompt
+  (including a possible retry note) stays within `LLM_MAX_PROMPT_CHARS`. Only
+  a segment too long for a prompt by itself is shortened (marked `...`). More
+  than 50 chunks fails the LLM path (cost guard).
+- *Output validation.* The model must answer with only a JSON array of
+  `{start_seconds, end_seconds, title, reason, score}`. The **whole answer**
+  is rejected when it is not JSON (`NaN`/`Infinity` refused), not an array,
+  has more than 100 items, or none of its items is valid; a single
+  surrounding Markdown code fence is tolerated. A rejected answer (or one cut
+  off at the token limit) is requested **once more**; a second rejection
+  fails the LLM path. Otherwise **each item** is checked strictly with
+  Pydantic (exactly those keys; finite numbers, not strings or booleans;
+  `0 <= start < end`; score in `[0, 1]`; title 1-200 and reason 1-500
+  characters without control characters) and discarded whole if invalid or
+  outside its chunk; nothing is clamped or repaired. The rest goes through
+  `validate_candidates()`, which drops out-of-range, wrong-length and
+  overlapping (duplicate) clips, so every clip satisfies
+  `0 <= start < end <= duration`.
+- *Failures and fallback.* HTTP errors (`401`/`403` authentication, `429`,
+  `5xx`, other `4xx`), timeouts, network errors, oversized (> 2 MiB) or
+  non-JSON responses are **not** retried. Whenever the LLM path fails, or the
+  settings are missing or invalid, the heuristic detector's result is
+  returned and `clip_detection_fallback` is logged with the failure category.
+  Requests do not follow redirects. The response body is streamed and
+  abandoned as soon as it passes 2 MiB, so a larger body is never held in
+  memory. `LLM_TIMEOUT_SECONDS` is an overall deadline checked as the body
+  arrives, and each connect (at most 10 s) or read also times out on its own,
+  so a request that stalls ends at most one read timeout after the deadline.
+- *Run record.* Each `detect()` stores a `ClipDetectionRun` in
+  `detector.last_run` and logs it as `llm_clip_detection_run`: detector used,
+  `fallback_used`, `failure_category`, provider, model, prompt version,
+  chunk, request, shortened-segment and discarded-item counts, input/output
+  tokens (when the provider reports them), estimated cost (when both
+  `LLM_*_COST_PER_MILLION_TOKENS` are set) and duration. Each request logs
+  `llm_request_completed` or `llm_request_failed` (status, category). API
+  keys, prompts, transcript text, titles and model answers are never logged.
 
 Limitations: no job or endpoint runs clip detection or stores clips yet.
+The LLM detector is tested only with mocks (`httpx.MockTransport`), never
+against a real provider, and its clip quality depends on the model. Chunks do
+not overlap, so a moment spanning a chunk boundary cannot be suggested, and
+each chunk is judged without the rest of the video's context. Prompt
+injection is mitigated (data-only framing, escaping, strict validation) but
+cannot be ruled out: a transcript can still sway which in-range clips are
+suggested and what their titles say. Token usage depends on the provider
+reporting it; the cost estimate uses the configured prices only.
 The heuristic only sees the transcript text (no audio or visual signals), so
 its scores reflect wording, not actual interest; keywords are matched within
 a single segment, and the default keyword list is English. A `Clip` row
