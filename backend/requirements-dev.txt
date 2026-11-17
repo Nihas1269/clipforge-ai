@@ -4,7 +4,7 @@
 # like the runtime requirements; Dependabot proposes updates weekly.
 ruff==0.12.8
 pip-audit==2.9.0
-cyclonedx-bom==7.0.0
+cyclonedx-bom==8.0.1
 PyYAML==6.0.3
 pytest-cov==7.0.0
 mypy==1.18.2
