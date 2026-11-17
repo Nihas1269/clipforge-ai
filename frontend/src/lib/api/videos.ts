@@ -185,6 +185,20 @@ export async function listVideos(params: ListVideosParams = {}): Promise<VideoLi
   return list;
 }
 
+/** One of the current user's videos; another user's video is `404` like a missing one. */
+export async function getVideo(id: string): Promise<Video> {
+  const video = await apiRequest<unknown>(videoPath(id));
+  if (!isListedVideo(video)) {
+    throw new ApiError(200, "invalid_response", GENERIC_ERROR_MESSAGE);
+  }
+  return video;
+}
+
+/** The URL the video element streams the source file from (`GET /videos/{id}/media`). */
+export function videoMediaUrl(id: string): string {
+  return `${getApiBaseUrl()}${videoPath(id)}/media`;
+}
+
 /** Deletes the video and its files. Resolves only once the backend confirms (`204`). */
 export async function deleteVideo(id: string): Promise<void> {
   await apiRequest<unknown>(videoPath(id), { method: "DELETE" });
