@@ -589,6 +589,90 @@ def test_downgrade_of_transcripts_migration_keeps_storage_deletions(
     assert "videos" in table_names
 
 
+def test_upgrade_creates_clips_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {column["name"]: column for column in inspector.get_columns("clips")}
+    assert set(columns) == {
+        "id",
+        "video_id",
+        "start_seconds",
+        "end_seconds",
+        "title",
+        "reason",
+        "score",
+        "status",
+        "source",
+        "created_at",
+        "updated_at",
+    }
+    for name, column in columns.items():
+        assert column["nullable"] is False, name
+    indexes = {index["name"]: index for index in inspector.get_indexes("clips")}
+    assert indexes["ix_clips_video_id_start_seconds"]["column_names"] == [
+        "video_id",
+        "start_seconds",
+    ]
+    (foreign_key,) = inspector.get_foreign_keys("clips")
+    assert foreign_key["referred_table"] == "videos"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+
+def test_migrated_clips_table_enforces_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+    video_id = uuid.uuid4().hex
+    insert_clip = text(
+        "INSERT INTO clips (id, video_id, start_seconds, end_seconds, title, "
+        "reason, score, source) VALUES (:id, :video_id, :start, :end, 'T', 'R', "
+        ":score, :source)"
+    )
+    valid = {"start": 0.0, "end": 20.0, "score": 0.5, "source": "heuristic"}
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": video_id, "user_id": user_id})
+        connection.execute(
+            insert_clip, {"id": uuid.uuid4().hex, "video_id": video_id, **valid}
+        )
+        row = connection.execute(
+            text("SELECT status, created_at, updated_at FROM clips")
+        ).one()
+    assert row.status == "suggested"
+    assert row.created_at is not None
+    assert row.updated_at is not None
+
+    invalid_clips = [
+        {"start": -1.0},
+        {"end": 0.0},
+        {"score": 1.5},
+        {"score": -0.5},
+        {"source": "guess"},
+    ]
+    for values in invalid_clips:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_clip,
+                    {"id": uuid.uuid4().hex, "video_id": video_id, **valid, **values},
+                )
+
+
+def test_downgrade_of_clips_migration_keeps_transcripts(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0006")
+
+    table_names = inspect(engine).get_table_names()
+    assert "clips" not in table_names
+    assert "transcripts" in table_names
+    assert "videos" in table_names
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

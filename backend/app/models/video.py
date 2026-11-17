@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 if TYPE_CHECKING:
+    from app.models.clip import Clip
     from app.models.transcript import Transcript
     from app.models.user import User
 
@@ -125,6 +126,13 @@ class Video(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         uselist=False,
+    )
+    # The database deletes the clips with the video (ON DELETE CASCADE).
+    clips: Mapped[list["Clip"]] = relationship(
+        back_populates="video",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Clip.start_seconds",
     )
 
     def __repr__(self) -> str:
