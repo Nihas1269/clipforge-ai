@@ -109,16 +109,18 @@ current suite", so the setup file does not register hooks itself.
 src/
   app/          Routes (App Router): root layout, landing page, /login,
                 /register, the protected /dashboard,
-                /settings/profile, /videos/new and the /videos/[id]
-                placeholder, and the shared loading, error, and
-                not-found states
+                /settings/profile, /videos/new, the /videos/[id] detail
+                page, and the shared loading, error, and not-found
+                states
   components/   Reusable UI components (Button, Container, SiteHeader,
                 StatusMessage, TextField), the auth forms in auth/, the
                 session provider, protected layout and user menu in
                 session/, the profile forms in profile/, the upload
-                form in videos/, and the dashboard in dashboard/
-  lib/          Shared constants, the API client (lib/api), and form
-                validation (lib/validation)
+                form and the video detail page in videos/, and the
+                dashboard in dashboard/
+  lib/          Shared constants, the API client (lib/api), media
+                timestamps (lib/timestamps.ts), and form validation
+                (lib/validation)
   test-utils/   Test helpers (a fake XMLHttpRequest)
 ```
 
@@ -230,14 +232,71 @@ login and register pages do not redirect users who are already logged in.
   The backend sees the disconnect, discards the partial body (`400
   upload_interrupted`) and stores nothing. Once the whole file has been sent
   the button is disabled, because the backend may already be storing it.
-- On success the page navigates to `/videos/{id}`, a placeholder until the
-  video detail page is built (CF-030).
+- On success the page navigates to the video detail page, `/videos/{id}`.
 
 Limitations: an abort that races the very end of the request body can still
 let the backend store the video, and there is no endpoint yet to delete it.
 Uploads are not resumable; a failed upload must be started again. Progress
 measures bytes sent to the server, not the time the server then needs to
 validate and store the file.
+
+## Video detail page
+
+`/videos/[id]` (`src/components/videos/video-detail.tsx`, protected by
+`src/app/videos/layout.tsx`) shows one video:
+
+- **Video.** A `<video>` player streaming `GET /api/v1/videos/{id}/media`
+  (`videoMediaUrl`), the status badge, the processing error of a failed
+  video, and its duration, resolution, frame rate, size, upload date and
+  project (`getVideo` in `src/lib/api/videos.ts`). Another user's or a
+  missing video shows "Video not found". While the video is `uploaded` or
+  `processing` it is re-read every 4 s.
+- **Transcript** (`transcript-panel.tsx`, `src/lib/api/transcripts.ts`).
+  **Generate transcript** (with a **Language** select; "Detect
+  automatically" sends no language) calls
+  `POST /videos/{id}/transcription` and follows the job. The transcript is a
+  scrollable list of segments with timestamps; clicking a segment seeks the
+  player to its start. Segments without a usable timestamp are shown but
+  cannot be clicked; an empty transcript says so. **Download SRT** /
+  **Download VTT** link to `transcript.srt` / `transcript.vtt` (the session
+  cookie authorizes the download), and **Refresh transcript** reloads it.
+- **Clips** (`clips-panel.tsx`, `src/lib/api/clips.ts`). **Find clips** is
+  enabled only when a transcript exists; it calls
+  `POST /videos/{id}/clips/detect` and follows the job. Each clip shows its
+  title, time range, duration, score, reason and status, with **Preview**,
+  **Accept** and **Reject** (`PATCH /clips/{id}` with `{status}`; the list
+  shows the clip the backend returns). **Add clip manually** takes a start
+  and end time (`m:ss`, `h:mm:ss` or seconds) and an optional title.
+- **Jobs** (`src/lib/api/jobs.ts`, `use-tracked-job.ts`, `use-polling.ts`).
+  A queued job is read with `GET /api/v1/jobs/{id}` every 2 s, only while it
+  is `queued` or `running`; polling stops at `succeeded`, `failed` or
+  `cancelled`, pauses while the tab is hidden (and checks again as soon as it
+  is shown), never overlaps a pending request, and its timer and listener
+  are removed when the page is left. A failed job shows its
+  `error_message`. A `404`/`401`/`403`, or 3 failed checks in a row, stop
+  polling with "Could not check the progress"; that is never shown as
+  success.
+- **Player control** (`player.ts`). Seeking and previews wait for the
+  media's metadata (`loadedmetadata`), clamp times to the media's duration,
+  and return a cleanup that removes their listeners. A preview seeks to the
+  clip start, plays, and pauses at the clip end; it ends (and removes its
+  listeners) when it reaches the end, when playback pauses or ends, when
+  `play()` is refused, when another seek or preview starts, and on unmount.
+- **Validation and pending actions.** Manual clips are checked in the
+  browser (valid times, `start < end`, end within the video's duration)
+  before any request; the backend checks the range and the allowed clip
+  length again and its message is shown. Buttons are disabled while their
+  request or job is pending, so actions cannot be sent twice.
+
+Limitations: the backend has no endpoint that lists a video's active jobs,
+so a job started before the page was opened (or before a reload) is not
+followed; starting it again returns `409 transcription_in_progress` /
+`clip_detection_in_progress`, which is shown. The clip length limits
+(`CLIP_MIN_SECONDS`/`CLIP_MAX_SECONDS`) are not exposed to the browser, so
+only the backend enforces them. Subtitle downloads are plain links: a
+failure (for example an expired session) is shown by the browser, not the
+page. Long transcripts are rendered in full inside a scrollable list (no
+virtualization); the backend's duration limit keeps them bounded.
 
 ## Dashboard
 
