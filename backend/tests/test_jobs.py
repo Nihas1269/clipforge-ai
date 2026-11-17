@@ -12,6 +12,7 @@ import pytest
 from celery.exceptions import Reject, SoftTimeLimitExceeded
 from kombu.exceptions import OperationalError
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  (registers every model on Base.metadata)
@@ -299,6 +300,27 @@ def test_unknown_or_invalid_job_id_is_ignored(db):
     assert succeed.apply(args=[str(uuid.uuid4())]).result is None
     assert succeed.apply(args=["not-a-uuid"]).result is None
     assert OBSERVED == []
+
+
+def test_job_deleted_right_after_claim_is_not_run(db, user, published, monkeypatch):
+    job = enqueue_job(JobType.METADATA, succeed, db=db, user_id=user.id)
+    original_get = Session.get
+
+    def get_deleted_job(self, entity, ident, **kwargs):
+        if entity is ProcessingJob:
+            return None
+        return original_get(self, entity, ident, **kwargs)
+
+    monkeypatch.setattr(Session, "get", get_deleted_job)
+
+    assert succeed.apply(args=[str(job.id)]).result is None
+    assert OBSERVED == []
+    assert OUTPUTS == {}
+    # The claim itself succeeded; only the follow-up read found no job.
+    db.expire_all()
+    assert (
+        db.scalar(select(ProcessingJob.attempts).where(ProcessingJob.id == job.id)) == 1
+    )
 
 
 def test_tasks_have_timeouts_and_late_acknowledgement():

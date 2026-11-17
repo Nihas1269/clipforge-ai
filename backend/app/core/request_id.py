@@ -9,6 +9,7 @@ through get_request_id(); enqueue_job() stores it on the job.
 import re
 import uuid
 from contextvars import ContextVar
+from typing import TypeGuard
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -27,7 +28,7 @@ def new_request_id() -> str:
     return uuid.uuid4().hex
 
 
-def is_valid_request_id(value: str | None) -> bool:
+def is_valid_request_id(value: str | None) -> TypeGuard[str]:
     return value is not None and _VALID_REQUEST_ID.fullmatch(value) is not None
 
 

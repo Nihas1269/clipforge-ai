@@ -72,8 +72,13 @@ jobs:
       - name: Check formatting (ruff format)
         run: ruff format --check .
 
-      - name: Run tests (pytest)
-        run: python -m pytest
+      - name: Type check (mypy)
+        run: mypy
+
+      # Prints the coverage of backend/app (configured in pyproject.toml).
+      # There is no failure threshold yet.
+      - name: Run tests with coverage (pytest)
+        run: python -m pytest --cov=app --cov-report=term-missing
 
       - name: Audit runtime dependencies (pip-audit)
         run: pip-audit -r requirements.txt

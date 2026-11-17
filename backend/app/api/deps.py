@@ -4,6 +4,7 @@ user's videos, email delivery and the account-flow rate limiters."""
 import logging
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -105,7 +106,7 @@ def get_optional_email_sender(
 ACCESS_TOKEN_COOKIE_NAME = "access_token"
 # Sent on every API path; the cookie is never readable by scripts.
 ACCESS_TOKEN_COOKIE_PATH = "/"
-ACCESS_TOKEN_COOKIE_SAMESITE = "lax"
+ACCESS_TOKEN_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -169,6 +170,7 @@ def get_current_user(
     missing, invalid, or expired token, an unknown or inactive user, and a
     token issued before the user's token version changed.
     """
+    token: str | None
     if credentials is not None:
         token = credentials.credentials
     else:

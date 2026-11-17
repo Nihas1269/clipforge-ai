@@ -1,2 +1,9 @@
 # Local storage backend data (uploaded videos, audio, exports)
 /storage/
+
+# Coverage and type checking output
+/.coverage
+/.coverage.*
+/htmlcov/
+/coverage.xml
+/.mypy_cache/

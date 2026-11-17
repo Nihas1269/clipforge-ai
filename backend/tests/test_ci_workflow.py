@@ -400,7 +400,8 @@ def test_backend_job_runs_checks(workflow):
     assert "pip install -r requirements.txt -r requirements-dev.txt" in commands
     assert "ruff check ." in commands
     assert "ruff format --check ." in commands
-    assert "python -m pytest" in commands
+    assert "python -m pytest --cov=app --cov-report=term-missing" in commands
+    assert re.search(r"^mypy$", commands, re.MULTILINE)
     assert "pip-audit -r requirements.txt" in commands
 
 
@@ -472,7 +473,7 @@ def test_dev_tools_are_not_runtime_requirements():
     runtime = (BACKEND_DIR / "requirements.txt").read_text(encoding="utf-8").lower()
     dev = (BACKEND_DIR / "requirements-dev.txt").read_text(encoding="utf-8").lower()
 
-    for tool in ("ruff", "pip-audit", "cyclonedx-bom", "pyyaml"):
+    for tool in ("ruff", "pip-audit", "cyclonedx-bom", "pyyaml", "pytest-cov", "mypy"):
         assert tool in dev
         assert tool not in runtime
     assert "-r requirements.txt" in dev

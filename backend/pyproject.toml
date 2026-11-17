@@ -1,0 +1,26 @@
+# Tool configuration only; the backend is not packaged. pytest is configured
+# in pytest.ini.
+
+# Coverage of backend/app, reported with `python -m pytest --cov=app` (see
+# docs/engineering-quality/testing-strategy.md). There is deliberately no
+# fail_under threshold yet.
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+# Gradual type checking of backend/app with `mypy` (run from backend/).
+# Functions without annotations are not checked yet; tighten these options
+# module by module as annotations are added.
+[tool.mypy]
+python_version = "3.11"
+files = ["app"]
+plugins = ["pydantic.mypy"]
+# Celery, boto3 and botocore ship without type information.
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true

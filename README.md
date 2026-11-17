@@ -24,7 +24,7 @@ merges, uses no repository secrets, and runs with a read-only `GITHUB_TOKEN`
 
 | Job             | Checks                                                                                                                                      |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend`       | On Python 3.11 and 3.12: installs FFmpeg (with libass), `ruff check`, `ruff format --check`, `pytest` (including the workflow policy tests), `pip-audit -r requirements.txt`. |
+| `backend`       | On Python 3.11 and 3.12: installs FFmpeg (with libass), `ruff check`, `ruff format --check`, `mypy`, `pytest` with a coverage report for `app/` (including the workflow policy tests), `pip-audit -r requirements.txt`. |
 | `frontend`      | On Node.js 24 (LTS): `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm audit --audit-level=high`.            |
 | `security`      | `gitleaks` secret scan of the full Git history (configuration in `.gitleaks.toml`).                                                         |
 | `workflow-lint` | `actionlint` and `zizmor` against every workflow in `.github/workflows/`.                                                                   |
@@ -38,6 +38,9 @@ Because the backend job uses a Python matrix, its checks appear as
 The `backend` (Python 3.12) and `frontend` jobs also generate CycloneDX SBOMs
 of the runtime dependencies and upload them as the workflow artifacts
 `sbom-backend` and `sbom-frontend`. They are not published anywhere else.
+
+Dependabot (`.github/dependabot.yml`) opens weekly update pull requests for
+the backend (pip), frontend (npm) and GitHub Actions dependencies.
 
 To run the same checks locally, see `backend/README.md` and run the npm
 scripts listed above in `frontend/`.

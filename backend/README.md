@@ -1287,19 +1287,26 @@ faster-whisper. They ignore `backend/.env` and clear the
 
 ## Linting, formatting, and dependency audit
 
-Development tools (`ruff`, `pip-audit`, `cyclonedx-bom`, and `PyYAML` for the
-CI workflow tests) are listed in `requirements-dev.txt`, separately from the
-runtime requirements:
+Development tools (`ruff`, `pip-audit`, `cyclonedx-bom`, `PyYAML` for the
+CI workflow tests, `pytest-cov` and `mypy`) are listed in
+`requirements-dev.txt`, separately from the runtime requirements:
 
 ```bash
 pip install -r requirements-dev.txt
 
 ruff check .
 ruff format --check .   # or `ruff format .` to apply formatting
+mypy                    # type check app/ (config in pyproject.toml)
+python -m pytest --cov=app --cov-report=term-missing   # tests with coverage
 pip-audit -r requirements.txt
 ```
 
-`requirements.txt` pins `dnspython>=2.9.2` (a transitive dependency of
+Every requirement is pinned to an exact version (`==`), and Dependabot
+proposes updates weekly. See `docs/engineering-quality/testing-strategy.md`
+for coverage, type checking and the critical modules whose coverage is
+tracked.
+
+`requirements.txt` pins `dnspython==2.9.2` (a transitive dependency of
 `email-validator`) to pick up the fixes for advisories reported by
 `pip-audit`. dnspython 2.9.x requires Python 3.11 or newer, which is why the
 backend no longer supports Python 3.10.

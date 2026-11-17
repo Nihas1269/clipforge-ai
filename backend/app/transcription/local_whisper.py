@@ -172,6 +172,7 @@ class LocalWhisperTranscriptionProvider:
             ) from None
         duration = provider_time(duration, "duration")
 
+        result_language: str | None
         if requested is not None and requested != UNDETERMINED_LANGUAGE:
             result_language = requested
         else:

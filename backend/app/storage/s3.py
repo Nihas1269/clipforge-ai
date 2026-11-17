@@ -105,6 +105,9 @@ def check_s3_settings(settings: Settings) -> None:
 def create_s3_client(settings: Settings) -> Any:
     """Create a boto3 S3 client from validated settings. No request is sent."""
     check_s3_settings(settings)
+    secret_access_key = settings.S3_SECRET_ACCESS_KEY
+    if secret_access_key is None:  # Already rejected by check_s3_settings().
+        raise StorageConfigurationError("S3_SECRET_ACCESS_KEY is not set.")
     config = Config(
         signature_version="s3v4",
         s3={"addressing_style": settings.S3_ADDRESSING_STYLE},
@@ -119,7 +122,7 @@ def create_s3_client(settings: Settings) -> Any:
         endpoint_url=settings.S3_ENDPOINT_URL,
         region_name=settings.S3_REGION,
         aws_access_key_id=settings.S3_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY.get_secret_value(),
+        aws_secret_access_key=secret_access_key.get_secret_value(),
         config=config,
     )
 
@@ -147,7 +150,10 @@ class S3Storage(StorageBackend):
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "S3Storage":
-        return cls(create_s3_client(settings), settings.S3_BUCKET)
+        client = create_s3_client(settings)
+        if settings.S3_BUCKET is None:  # Already rejected by check_s3_settings().
+            raise StorageConfigurationError("S3_BUCKET is not set.")
+        return cls(client, settings.S3_BUCKET)
 
     def save(self, key: str, fileobj: BinaryIO, *, max_bytes: int | None = None) -> int:
         validate_key(key)
