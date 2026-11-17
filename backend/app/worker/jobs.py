@@ -38,13 +38,14 @@ from typing import Any, cast
 from celery import Task
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.signals import worker_ready
-from sqlalchemy import CursorResult, Executable, select, update
+from sqlalchemy import ColumnElement, CursorResult, Executable, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401  (registers every model, so relationships resolve)
 from app import database
 from app.core.request_id import get_request_id, is_valid_request_id
+from app.models.export import ACTIVE_EXPORT_STATUSES, Export, ExportStatus
 from app.models.processing_job import (
     ACTIVE_JOB_STATUSES,
     IDEMPOTENCY_KEY_MAX_LENGTH,
@@ -52,7 +53,9 @@ from app.models.processing_job import (
     JobType,
     ProcessingJob,
 )
+from app.models.storage_deletion import PendingStorageDeletion
 from app.models.video import Video, VideoStatus, transition_status
+from app.storage.keys import export_key
 from app.worker.celery_app import FAIL_STALE_JOBS_TASK_NAME, celery_app
 
 logger = logging.getLogger(__name__)
@@ -84,6 +87,7 @@ STALE_JOB_MESSAGE = (
     "The job was interrupted before it finished (for example by a worker restart)."
 )
 STALE_VIDEO_MESSAGE = "Processing was interrupted. Try again later."
+STALE_EXPORT_MESSAGE = "Rendering was interrupted. Try again."
 
 # user:password@ in URLs, so credentials never reach error_message.
 _URL_CREDENTIALS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@")
@@ -685,7 +689,9 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
     A job is stale when its attempt started more than STALE_RUNNING_AFTER ago
     (the largest hard time limit plus a grace period), which only happens
     when the worker running it was lost (killed, restarted, out of memory).
-    Returns the number of jobs failed.
+    Exports left rendering by such a job, or by any render job that is no
+    longer active (for example one whose retry could not be published), are
+    failed as well. Returns the number of jobs failed.
     """
     if now is None:
         now = _utcnow()
@@ -702,6 +708,7 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
     )
     failed = 0
     stale_video_ids = []
+    stale_render_job_ids = []
     for job_id, job_type, video_id in stale:
         # Re-checked atomically in case the job finished meanwhile.
         changed = _execute_update(
@@ -725,9 +732,14 @@ def fail_stale_jobs(db: Session, *, now: datetime | None = None) -> int:
             logger.warning("job_marked_stale", extra={"job_id": str(job_id)})
             if job_type == JobType.METADATA and video_id is not None:
                 stale_video_ids.append(video_id)
+            if job_type == JobType.RENDER:
+                stale_render_job_ids.append(job_id)
     db.commit()
     for video_id in stale_video_ids:
         _fail_stale_video(db, video_id)
+    if stale_render_job_ids:
+        _fail_stale_exports(db, stale_render_job_ids)
+    _fail_orphaned_exports(db)
     return failed
 
 
@@ -743,6 +755,81 @@ def _fail_stale_video(db: Session, video_id: uuid.UUID) -> None:
         logger.error(
             "stale_video_update_failed",
             extra={"video_id": str(video_id), "error_type": type(exc).__name__},
+        )
+
+
+def _fail_stale_exports(db: Session, job_ids: list[uuid.UUID]) -> None:
+    """Fail exports left queued or rendering by render jobs whose worker was lost."""
+    _fail_exports(
+        db,
+        Export.job_id.in_(job_ids),
+        Export.status.in_(sorted(ACTIVE_EXPORT_STATUSES, key=lambda s: s.value)),
+    )
+
+
+def _fail_orphaned_exports(db: Session) -> None:
+    """Fail exports left rendering by a render job that is no longer active.
+
+    This happens when a retry of the job could not be published (the job
+    fails, but the export was not failed because a retry was expected) or
+    when the job was cancelled and its worker then lost. No job can finish
+    such an export, and a rendering export is never taken over or queued
+    again, so it would otherwise stay `rendering` for good. A queued export
+    whose job ended is left alone: queue_render() takes it over.
+    """
+    job_ended = (
+        select(ProcessingJob.id)
+        .where(
+            ProcessingJob.id == Export.job_id,
+            ProcessingJob.status.not_in(
+                sorted(ACTIVE_JOB_STATUSES, key=lambda s: s.value)
+            ),
+        )
+        .correlate(Export)
+        .exists()
+    )
+    _fail_exports(db, Export.status == ExportStatus.RENDERING, job_ended)
+
+
+def _fail_exports(db: Session, *conditions: ColumnElement[bool]) -> None:
+    """Fail the exports matching `conditions` with STALE_EXPORT_MESSAGE.
+
+    A worker killed during the upload can leave a partial object at the
+    export's key, so its deletion is queued (PendingStorageDeletion) in the
+    same transaction; deleting a missing object is harmless.
+    """
+    try:
+        stale = db.execute(
+            select(Export.id, Export.user_id, Export.job_id).where(*conditions)
+        ).all()
+        for export_id, user_id, job_id in stale:
+            # Re-checked atomically in case the export changed meanwhile.
+            changed = _execute_update(
+                db,
+                update(Export)
+                .where(Export.id == export_id, Export.job_id == job_id, *conditions)
+                .values(
+                    status=ExportStatus.FAILED,
+                    error_message=STALE_EXPORT_MESSAGE,
+                    storage_key=None,
+                    size_bytes=None,
+                )
+                .execution_options(synchronize_session=False),
+            )
+            if changed == 1:
+                db.add(
+                    PendingStorageDeletion(
+                        storage_key=export_key(str(user_id), str(export_id))
+                    )
+                )
+                logger.warning(
+                    "export_marked_stale", extra={"export_id": str(export_id)}
+                )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "stale_export_update_failed", extra={"error_type": type(exc).__name__}
         )
 
 

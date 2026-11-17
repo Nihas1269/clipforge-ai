@@ -1005,6 +1005,122 @@ def test_downgrade_of_caption_migration_keeps_clips(database_url, engine):
     assert "clip_captions" in inspect(engine).get_table_names()
 
 
+def test_upgrade_creates_exports_table(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {column["name"]: column for column in inspector.get_columns("exports")}
+    assert set(columns) == {
+        "id",
+        "clip_id",
+        "user_id",
+        "aspect_ratio",
+        "reframe_mode",
+        "include_captions",
+        "status",
+        "storage_key",
+        "size_bytes",
+        "error_message",
+        "job_id",
+        "created_at",
+        "completed_at",
+    }
+    nullable = {"storage_key", "size_bytes", "error_message", "job_id", "completed_at"}
+    for name, column in columns.items():
+        assert column["nullable"] is (name in nullable), name
+    indexes = {index["name"]: index for index in inspector.get_indexes("exports")}
+    assert indexes["ix_exports_clip_id"]["column_names"] == ["clip_id"]
+    assert indexes["ix_exports_user_id"]["column_names"] == ["user_id"]
+    assert indexes["ix_exports_job_id"]["column_names"] == ["job_id"]
+    foreign_keys = {
+        fk["referred_table"]: fk for fk in inspector.get_foreign_keys("exports")
+    }
+    assert set(foreign_keys) == {"clips", "users"}
+    for foreign_key in foreign_keys.values():
+        assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+
+def test_migrated_exports_table_enforces_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+    video_id = uuid.uuid4().hex
+    clip_id = uuid.uuid4().hex
+    insert_export = text(
+        "INSERT INTO exports (id, clip_id, user_id, aspect_ratio, include_captions, "
+        "status, size_bytes) VALUES (:id, :clip_id, :user_id, :aspect, :captions, "
+        ":status, :size)"
+    )
+    # A bound Python bool, which every database accepts for a boolean column.
+    valid = {"aspect": "9:16", "captions": True, "status": "queued", "size": None}
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": video_id, "user_id": user_id})
+        connection.execute(
+            text(
+                "INSERT INTO clips (id, video_id, start_seconds, end_seconds, title, "
+                "reason, score, source) VALUES (:id, :video_id, 0, 20, 'T', 'R', "
+                "0.5, 'manual')"
+            ),
+            {"id": clip_id, "video_id": video_id},
+        )
+        for aspect in ("9:16", "1:1", "4:5", "16:9"):
+            connection.execute(
+                insert_export,
+                {
+                    "id": uuid.uuid4().hex,
+                    "clip_id": clip_id,
+                    "user_id": user_id,
+                    **valid,
+                    "aspect": aspect,
+                },
+            )
+        row = connection.execute(
+            text("SELECT reframe_mode, status, created_at FROM exports LIMIT 1")
+        ).one()
+    assert row.reframe_mode == "center"
+    assert row.status == "queued"
+    assert row.created_at is not None
+
+    invalid = [
+        {"aspect": "2:1"},
+        {"status": "cancelled"},
+        {"size": -1},
+    ]
+    for values in invalid:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_export,
+                    {
+                        "id": uuid.uuid4().hex,
+                        "clip_id": clip_id,
+                        "user_id": user_id,
+                        **valid,
+                        **values,
+                    },
+                )
+
+
+def test_downgrade_of_exports_migration_keeps_captions(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0011")
+
+    table_names = inspect(engine).get_table_names()
+    assert "exports" not in table_names
+    assert "clip_captions" in table_names
+    # Only the exports migration is rolled back; project tables stay.
+    assert "projects" in table_names
+    assert "project_videos" in table_names
+
+    command.upgrade(config, "head")
+    assert "exports" in inspect(engine).get_table_names()
+
+
 def test_upgrade_creates_project_tables(database_url, engine):
     command.upgrade(make_config(database_url), "head")
 
@@ -1098,7 +1214,8 @@ def test_downgrade_of_projects_migration_keeps_videos_and_clips(database_url, en
     assert "project_videos" not in table_names
     assert "videos" in table_names
     assert "subscriptions" in table_names
-    # Only the projects migration is rolled back; caption tables stay.
+    # The later exports migration is rolled back too; caption tables stay.
+    assert "exports" not in table_names
     assert "clip_captions" in table_names
     assert "caption_styles" in table_names
     columns = {column["name"] for column in inspector.get_columns("clips")}

@@ -14,7 +14,7 @@ from app.storage.base import (
     StorageObjectTooLargeError,
     validate_key,
 )
-from app.storage.keys import video_source_key
+from app.storage.keys import export_key, video_source_key
 from app.storage.local import LocalStorage
 from app.storage.s3 import S3Storage
 
@@ -28,6 +28,7 @@ __all__ = [
     "StorageError",
     "StorageObjectNotFoundError",
     "StorageObjectTooLargeError",
+    "export_key",
     "get_storage",
     "validate_key",
     "video_source_key",

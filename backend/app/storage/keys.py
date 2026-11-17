@@ -32,3 +32,14 @@ def video_source_key(user_id: int | str, video_id: int | str, ext: str = "") -> 
             "ext must be empty or '.' followed by letters or digits."
         )
     return validate_key(f"users/{user}/videos/{video}/source{ext.lower()}")
+
+
+def export_key(user_id: int | str, export_id: int | str) -> str:
+    """Return the key of a rendered export.
+
+    For example export_key(1, 7) == "users/1/exports/7.mp4". Rendering the
+    same export again writes to the same key, so retries never duplicate it.
+    """
+    user = _validate_id("user_id", user_id)
+    export = _validate_id("export_id", export_id)
+    return validate_key(f"users/{user}/exports/{export}.mp4")

@@ -14,6 +14,7 @@ from app.models.billing import (
 )
 from app.models.caption import CaptionStyle, ClipCaption
 from app.models.clip import Clip, ClipSource, ClipStatus
+from app.models.export import Export, ExportAspectRatio, ExportStatus, ReframeMode
 from app.models.processing_job import JobStatus, JobType, ProcessingJob
 from app.models.project import Project, ProjectVideo
 from app.models.storage_deletion import PendingStorageDeletion
@@ -29,6 +30,9 @@ __all__ = [
     "ClipCaption",
     "ClipSource",
     "ClipStatus",
+    "Export",
+    "ExportAspectRatio",
+    "ExportStatus",
     "JobStatus",
     "JobType",
     "Payment",
@@ -37,6 +41,7 @@ __all__ = [
     "ProcessingJob",
     "Project",
     "ProjectVideo",
+    "ReframeMode",
     "Subscription",
     "SubscriptionStatus",
     "Transcript",

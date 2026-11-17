@@ -917,8 +917,8 @@ of a segment that only partly overlaps the clip. The `karaoke` preset is a
 look (colors, weight); word-by-word highlighting is not rendered because
 captions do not store word timings. Fonts in `CAPTION_FONTS` must be
 installed where FFmpeg/libass renders, otherwise libass substitutes another
-font. No endpoint serves the ASS file yet; the render job will use
-`render_ass`.
+font. No endpoint serves the ASS file; the render job (see Rendering
+exports) burns it in with `render_ass`.
 
 ## Billing: plans, subscriptions and usage
 
@@ -1363,8 +1363,8 @@ Redis data loss) stays queued; there is no automatic re-publishing. Stale
 running jobs are failed, not retried. A running task is not forcibly stopped
 on cancellation. Jobs are queued by the upload endpoint (metadata
 extraction), `POST /videos/{id}/transcription` and
-`POST /videos/{id}/clips/detect`; no API endpoint cancels
-them yet.
+`POST /videos/{id}/clips/detect`, and render jobs by `queue_render` (no
+endpoint yet); no API endpoint cancels them yet.
 
 ## Media metadata extraction
 
@@ -1531,6 +1531,122 @@ The time limit is checked between frames, so one very slow frame decode can
 overrun it. Setting `OPENCV_FFMPEG_CAPTURE_OPTIONS` temporarily affects the
 whole process, so another OpenCV capture opened at the same moment from
 another thread would also get the whitelist.
+
+## Rendering exports
+
+**Model** (`app/models/export.py`, migration `0012`): `exports` has `id`,
+`clip_id` (`ON DELETE CASCADE`), `user_id` (`ON DELETE CASCADE`),
+`aspect_ratio` (`9:16`, `1:1`, `4:5`, `16:9`), `reframe_mode` (`center`,
+`face`), `include_captions`, `status` (`queued` (default), `rendering`,
+`completed`, `failed`), `storage_key` and `size_bytes` (set only once the
+rendered file is validated and stored), `error_message` (a short public
+message), `job_id` (the render job that owns the export), `created_at` and
+`completed_at`.
+
+**Pipeline** (`app/render/pipeline.py`, pure functions):
+`build_ffmpeg_args(source, output, start=, end=, plan=, subtitles_path=None)`
+returns the argument list for `run_ffmpeg` (never a shell command line; all
+paths must be absolute):
+
+- **Trim**: `-accurate_seek -ss <start>` before `-i` (frame-accurate: frames
+  before `start` are decoded and dropped) and `-t <end - start>`. `start` and
+  `end` are the clip's source-video seconds; the output starts at 0.
+- **Crop**: `CropPlan` keyframes are in **source-video seconds**; they are
+  converted to **clip-relative** seconds (`time - start`, clamped to 0) for
+  the filter, whose `t` starts at 0. One keyframe (or a crop that never
+  moves) gives a constant `crop=w=W:h=H:x=X:y=Y`; several give
+  piecewise-linear `x` (and `y`) expressions that interpolate between
+  keyframes and hold the first/last position outside them. Interpolated
+  positions lie between valid keyframe positions, so the crop always stays
+  in the frame. At most 240 keyframes are used (evenly chosen, first and
+  last kept) and segments are picked with a balanced `if()` tree, because
+  FFmpeg's expression parser refuses about 100 nesting levels.
+- **Scale** to `1080x1920` (`9:16`), `1080x1080` (`1:1`), `1080x1350`
+  (`4:5`) or `1920x1080` (`16:9`), all even, with `setsar=1`.
+- **Captions**: the `ass` filter (libass) with the generated ASS file, after
+  scaling (ASS PlayRes = output size). The path is escaped for FFmpeg's two
+  filter-syntax levels (`escape_filter_path`): on Windows backslashes become
+  `/` and the drive letter's `:` is escaped; `\`, `'`, `:`, `[`, `]`, `,`
+  and `;` are escaped as needed. Caption text is escaped by `render_ass`.
+- **Output**: `libx264` (`veryfast`, CRF 20, `yuv420p`) + AAC 160 kb/s, the
+  first video and (optional) first audio stream, source metadata dropped,
+  `-movflags +faststart`, MP4.
+
+`check_render_output(info, ...)` is the export-validity check: the file
+must be non-empty, have a video stream of exactly the output size (hence the
+expected aspect ratio), a duration within **0.25 s**
+(`DURATION_TOLERANCE_SECONDS`) of `end - start`, and an audio stream when
+the source has one.
+
+**Job** (`app/worker/render.py`): `queue_render(db, export)` queues the
+`render` job `app.worker.render.render_export` (payload `{"export_id"}`,
+idempotency key = export id, so one active render per export; 3 attempts,
+soft/hard time limit 3300/3420 s) and records its id on the export. The job:
+
+1. claims the export with one conditional `UPDATE` (`queued`, or
+   `rendering` for a retry of the same job, to `rendering`). A `completed`
+   export is left alone (duplicate deliveries do nothing); a `failed` export
+   or one owned by another active job is refused. A `queued` export whose
+   recorded job ended without rendering it (for example cancelled while
+   queued) is taken over by the new job, so queuing it again works;
+2. checks that the video is `ready` with size and duration, the clip lies
+   within it and the source key is the video's own key, and loads the
+   captions and caption style (the classic default with the first
+   `CAPTION_FONTS` font when the clip has none) if `include_captions`;
+3. in a new temporary directory: probes the source (for its audio stream),
+   plans the reframe with `plan_reframe` (face mode falls back to a center
+   crop), writes `captions.ass` with `render_ass` (clip-relative times, no
+   offset) and runs FFmpeg (`FFMPEG_TIMEOUT_SECONDS`, bounded output);
+4. probes the output and runs `check_render_output`; a file that fails is a
+   failed render;
+5. only then uploads it to `users/{user_id}/exports/{export_id}.mp4`
+   (`export_key`, at most `FFMPEG_MAX_OUTPUT_FILE_MB`) and marks the export
+   `completed` with one conditional `UPDATE`.
+
+The temporary directory is removed on success and on every failure. A
+failed upload, or a final update that fails or finds the export changed,
+deletes the stored object again. Retries write to the same key. Storage
+read/write errors and local disk errors (writing `captions.ass`) are
+retried; FFmpeg errors, timeouts (including the job's soft time limit during
+the upload), a missing FFmpeg, failed validation, an unready video, a
+cancelled job and unexpected errors fail at once. When
+the job fails for good, the export is marked `failed` with the job's
+sanitized message (for example "The video could not be rendered.", "The
+rendered video failed validation."); FFmpeg output, paths, keys and caption
+text are never stored or logged. `fail_stale_jobs` also fails exports whose
+render job was lost ("Rendering was interrupted. Try again.") and, in the
+same transaction, adds a `pending_storage_deletions` row for the export key,
+so a partial object left by a worker killed during the upload is removed by
+the cleanup outbox. It does the same for any export still `rendering` whose
+recorded render job is no longer queued or running (for example when a retry
+could not be published), so no export stays `rendering` for good. FFmpeg is
+run with `-fs FFMPEG_MAX_OUTPUT_FILE_MB`, so an oversized render stops
+before it fills the local disk and fails with "The rendered video is too
+large to store." A temporary directory that cannot be removed is logged
+(`render_temp_cleanup_failed`). Log events:
+`render_started` (aspect, requested and used reframe mode, fallback reason,
+keyframe and caption counts), `render_completed` (size, duration),
+`render_failed`, `render_output_invalid` (reason) and others, with the
+export id only.
+
+Limitations: there is no API endpoint yet to create, list or download
+exports (the export model and job are ready for one). Exports are not
+deleted with their storage object: deleting a clip or video deletes the
+export rows (on PostgreSQL) but not the rendered files. Face mode needs the
+full face-tracking pass before FFmpeg starts. Crop positions are
+interpolated linearly between keyframes (the planner's keyframes hold a
+position until the next one); more than 240 keyframes are thinned out.
+Captions need libass in the worker's FFmpeg, and fonts not installed there
+are substituted by libass. A clip with `include_captions` but no captions
+is rendered without subtitles. The validity check probes the file
+(streams, size, duration); it does not decode every frame. Output size and
+quality are fixed (no per-plan presets yet). Cancelling a running render
+stops it only after FFmpeg finishes, and an export whose queued job is
+cancelled stays `queued` until `queue_render` is called for it again. A
+partial object left by a killed worker is only removed once
+`fail_stale_jobs` notices the lost job (after 65 minutes). If a retry cannot
+be published, the export stays `rendering` until the next `fail_stale_jobs`
+run (every 5 minutes, and when a worker starts).
 
 ## Running the server
 
@@ -1853,7 +1969,11 @@ with `ffmpeg -f lavfi` (no media files are committed); tests that need the
 real `ffmpeg`/`ffprobe` binaries are skipped, with the reason shown by
 `pytest -rs`, when they are not installed. The transcription provider tests
 use `httpx.MockTransport` and fakes, so they need no network, API key or
-faster-whisper. The reframing tests use synthetic numpy frames and a fake
+faster-whisper. The render tests check the FFmpeg arguments as pure
+functions and run the render job with fake FFmpeg/ffprobe; the real-render
+tests (in `tests/test_render_pipeline.py` and `tests/test_render_job.py`)
+render the generated test video and are skipped when FFmpeg, the libass
+`ass` filter or libx264 is missing. The reframing tests use synthetic numpy frames and a fake
 face detector; the few that run real OpenCV generate a small MJPEG video at
 runtime and are skipped when OpenCV is not installed. The tests ignore
 `backend/.env` and clear the
