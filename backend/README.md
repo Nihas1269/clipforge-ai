@@ -977,6 +977,96 @@ worker is killed during a metadata job (hard time limit, crash),
 stale timeout (65 minutes). A video whose queued message was lost (for
 example after Redis data loss) stays `uploaded`.
 
+## Reframing (crop planning)
+
+`app/reframe/` computes crop windows that turn landscape (or portrait)
+footage into `9:16`, `1:1`, `4:5` or `16:9`. It only plans the crop; it does
+not render video and has no API endpoint yet.
+
+**Coordinates.** A `CropPlan` has `crop_width`/`crop_height` and a tuple of
+`Keyframe(time_seconds, x, y)`: integer **pixel** coordinates of the crop's
+**top-left corner** in the source frame, valid from `time_seconds`
+(source-video time, like transcripts) until the next keyframe. `CropPlan`
+rejects any keyframe that would put the crop outside the frame
+(`0 <= x <= source_width - crop_width`, likewise for `y`) and keyframes out
+of time order. `mode` is the mode actually used and `fallback_reason` says why
+a face request produced a center crop (`no_faces` or
+`detection_failed:<ErrorType>`). `detector` records which detector produced a
+face plan, with its parameters (the detector's `name`, or its class name),
+for example
+`opencv-haar:haarcascade_frontalface_default(opencv=4.12.0,scale_factor=1.1,min_neighbors=5,min_size_fraction=0.05)`;
+it is `None` for center plans.
+
+**Planner** (`planner.py`, pure functions, no OpenCV):
+
+- `compute_crop_size(src_w, src_h, aspect)` — the largest crop of the aspect
+  that fits: the limiting side uses the full source size (rounded down to
+  even), the other side the nearest even number to the exact ratio, so sizes
+  are even (as yuv420p encoders require) and within 2 pixels of the exact
+  ratio. 1920x1080 gives 608x1080 (`9:16`), 1080x1080, 864x1080 (`4:5`) and
+  1920x1080; 1280x720 gives 406x720, 720x720, 576x720 and 1280x720. Sources
+  must be 16-65535 pixels per side; other aspects raise `ValueError`.
+- `center_crop_plan(src_w, src_h, aspect, start=0.0)` — one centered keyframe.
+- `smooth_keyframes(keyframes, max_step_px)` — each keyframe moves from the
+  previous one toward its target by at most `max_step_px` (straight-line
+  distance), so jumps become pans. Outputs lie between the previous output
+  and the target, so in-frame inputs stay in frame.
+
+**Face tracking** (`face_tracking.py`, optional): samples frames at
+`sample_fps` (default 2, at most 30; clips are sampled less often so that at
+most 3600 frames are analysed) from `start` up to `end`, detects faces with
+OpenCV's bundled Haar cascade (`haarcascade_frontalface_default.xml` from
+`opencv-python-headless`; nothing is downloaded), and uses the largest face's
+center per sample. Samples without a face use the frame center before the
+first face, are interpolated linearly between two faces, and carry the last
+face forward after it. The crop is clamped into the frame and smoothed (by
+default at most 5% of the larger source side per sample). Frames are
+analysed as they are read and not kept. The detector (`FaceDetector`, any
+object with `detect(frame) -> [(x, y, w, h)]`) and the frame reader are
+injectable, so another detector (for example MediaPipe) can be used and tests
+use fakes. A detector may have a `name` attribute identifying its model and
+parameters; it is recorded on the plan. OpenCV is imported only when face
+tracking runs; the capture is always opened with OpenCV's FFmpeg backend
+(`cv2.CAP_FFMPEG`) and `protocol_whitelist;file`, so a crafted file cannot
+make it open URLs. The whitelist is passed through
+`OPENCV_FFMPEG_CAPTURE_OPTIONS`, which is set only while the capture is
+opened and then restored to its previous value (other options in that
+variable do not apply to this capture). Face tracking stops after
+`timeout_seconds` (default 300, at most 3600; checked between frames).
+
+**`plan_reframe(video_path, start, end, aspect, mode="center"|"face",
+source_size=None, media_duration=None, ...)`** (`service.py`) validates the
+arguments (`0 <= start < end <= media_duration`, finite numbers, not
+booleans; supported aspect and mode; otherwise `ValueError`). `source_size`
+and `media_duration` must be given together (for example from the `Video`
+row); when both are omitted they are read with ffprobe (`ReframeError` if the
+file cannot be probed or its size or duration is unknown). In `face` mode
+**any** failure — OpenCV or the cascade missing, the video unreadable,
+decoded frames rotated relative to the probed size, a detector error, the
+time limit exceeded, or no face in any sample — falls back to the center
+crop, with `fallback_reason` set and a `reframe_face_tracking_fallback`
+warning. Log events (`face_tracking_sampled`, `reframe_planned`) contain
+counts, sizes, modes, the detector name and the error type only, never paths
+or frames.
+
+Limitations: the Haar cascade only finds fairly frontal, upright,
+reasonably lit faces of at least about 5% of the frame height (24 px
+minimum); profiles, tilted heads, occlusions, very small or blurred faces are
+often missed, and it produces false positives on face-like textures. With
+several people it follows the largest face, which can switch between
+speakers; there is no identity tracking or speaker detection. Detections
+are only taken every 0.5 s by default and not filtered beyond the per-step
+movement limit, so fast motion lags and detection noise can cause small
+pans. Seeking uses OpenCV's nearest-frame seek, which may be inexact for some
+codecs. Keyframe times are source-video seconds. Videos with rotation
+metadata (typically phone recordings) are probed with their stored size but
+decoded rotated, so face mode falls back to the center crop for them when the
+orientation differs; the center crop itself uses the probed (unrotated) size.
+The time limit is checked between frames, so one very slow frame decode can
+overrun it. Setting `OPENCV_FFMPEG_CAPTURE_OPTIONS` temporarily affects the
+whole process, so another OpenCV capture opened at the same moment from
+another thread would also get the whitelist.
+
 ## Running the server
 
 ```bash
@@ -1282,7 +1372,10 @@ with `ffmpeg -f lavfi` (no media files are committed); tests that need the
 real `ffmpeg`/`ffprobe` binaries are skipped, with the reason shown by
 `pytest -rs`, when they are not installed. The transcription provider tests
 use `httpx.MockTransport` and fakes, so they need no network, API key or
-faster-whisper. They ignore `backend/.env` and clear the
+faster-whisper. The reframing tests use synthetic numpy frames and a fake
+face detector; the few that run real OpenCV generate a small MJPEG video at
+runtime and are skipped when OpenCV is not installed. The tests ignore
+`backend/.env` and clear the
 `get_settings()` cache between tests (see `tests/conftest.py`).
 
 ## Linting, formatting, and dependency audit
