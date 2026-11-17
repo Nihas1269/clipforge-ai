@@ -12,6 +12,7 @@ from app.models.processing_job import ProcessingJob
 from app.models.storage_deletion import PendingStorageDeletion
 from app.models.transcript import Transcript, TranscriptSegment
 from app.models.video import Video
+from app.repositories.captions import delete_caption_data
 from app.services.storage_cleanup import delete_pending_object
 from app.storage import StorageBackend
 
@@ -47,14 +48,15 @@ def delete_video(
         )
         if storage_key is None:
             raise VideoNotFoundError(str(video_id))
-        # The foreign keys also cascade, but deleting the jobs, clips and
-        # transcript explicitly
+        # The foreign keys also cascade, but deleting the jobs, clips (with
+        # their captions) and transcript explicitly
         # keeps databases without enforced foreign keys consistent.
         db.execute(
             delete(ProcessingJob)
             .where(ProcessingJob.video_id == video_id)
             .execution_options(synchronize_session=False)
         )
+        delete_caption_data(db, select(Clip.id).where(Clip.video_id == video_id))
         db.execute(
             delete(Clip)
             .where(Clip.video_id == video_id)

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.clips.base import TIME_TOLERANCE_SECONDS, ClipCandidate
 from app.models.clip import Clip, ClipSource, ClipStatus
 from app.models.video import Video
+from app.repositories.captions import delete_caption_data
 
 logger = logging.getLogger(__name__)
 
@@ -79,14 +80,14 @@ def replace_suggestions(
     """
     if source is ClipSource.MANUAL:
         raise ValueError("Detected clips cannot have the manual source.")
+    replaced = (
+        Clip.video_id == video_id,
+        Clip.status == ClipStatus.SUGGESTED,
+        Clip.source != ClipSource.MANUAL,
+    )
+    delete_caption_data(db, select(Clip.id).where(*replaced))
     deleted = db.execute(
-        delete(Clip)
-        .where(
-            Clip.video_id == video_id,
-            Clip.status == ClipStatus.SUGGESTED,
-            Clip.source != ClipSource.MANUAL,
-        )
-        .execution_options(synchronize_session="fetch")
+        delete(Clip).where(*replaced).execution_options(synchronize_session="fetch")
     )
     kept = list(db.scalars(select(Clip).where(Clip.video_id == video_id)))
     chosen = [

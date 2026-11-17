@@ -847,6 +847,164 @@ def test_downgrade_of_billing_migration_keeps_clips(database_url, engine):
     assert "users" in table_names
 
 
+def test_upgrade_creates_caption_tables(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+
+    inspector = inspect(engine)
+    columns = {
+        column["name"]: column for column in inspector.get_columns("clip_captions")
+    }
+    assert set(columns) == {
+        "id",
+        "clip_id",
+        "index",
+        "start_seconds",
+        "end_seconds",
+        "text",
+    }
+    for name, column in columns.items():
+        assert column["nullable"] is False, name
+    (unique,) = inspector.get_unique_constraints("clip_captions")
+    assert unique["column_names"] == ["clip_id", "index"]
+    (foreign_key,) = inspector.get_foreign_keys("clip_captions")
+    assert foreign_key["referred_table"] == "clips"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+    columns = {
+        column["name"]: column for column in inspector.get_columns("caption_styles")
+    }
+    assert set(columns) == {
+        "id",
+        "clip_id",
+        "preset",
+        "font_family",
+        "font_size",
+        "primary_color",
+        "outline_color",
+        "position",
+        "uppercase",
+        "max_chars_per_line",
+        "created_at",
+        "updated_at",
+    }
+    indexes = {
+        index["name"]: index for index in inspector.get_indexes("caption_styles")
+    }
+    assert indexes["ix_caption_styles_clip_id"]["unique"]
+    (foreign_key,) = inspector.get_foreign_keys("caption_styles")
+    assert foreign_key["referred_table"] == "clips"
+    assert foreign_key["options"].get("ondelete") == "CASCADE"
+
+
+def test_migrated_caption_tables_enforce_constraints(database_url, engine):
+    command.upgrade(make_config(database_url), "head")
+    user_id = uuid.uuid4().hex
+    video_id = uuid.uuid4().hex
+    clip_id = uuid.uuid4().hex
+    insert_caption = text(
+        'INSERT INTO clip_captions (id, clip_id, "index", start_seconds, '
+        "end_seconds, text) VALUES (:id, :clip_id, :index, :start, :end, 'x')"
+    )
+    insert_style = text(
+        "INSERT INTO caption_styles (id, clip_id, preset, font_family, font_size, "
+        "primary_color, outline_color, position, uppercase, max_chars_per_line) "
+        "VALUES (:id, :clip_id, :preset, 'Arial', :font_size, '#FFFFFFFF', "
+        "'#000000FF', :position, 0, :max_chars)"
+    )
+    style = {
+        "preset": "classic",
+        "font_size": 64,
+        "position": "bottom",
+        "max_chars": 32,
+    }
+
+    with engine.begin() as connection:
+        connection.execute(
+            INSERT_USER,
+            {"id": user_id, "email": "alice@example.com", "hashed_password": "x"},
+        )
+        connection.execute(INSERT_VIDEO, {"id": video_id, "user_id": user_id})
+        connection.execute(
+            text(
+                "INSERT INTO clips (id, video_id, start_seconds, end_seconds, title, "
+                "reason, score, source) VALUES (:id, :video_id, 0, 20, 'T', 'R', "
+                "0.5, 'heuristic')"
+            ),
+            {"id": clip_id, "video_id": video_id},
+        )
+        connection.execute(
+            insert_caption,
+            {
+                "id": uuid.uuid4().hex,
+                "clip_id": clip_id,
+                "index": 0,
+                "start": 0.0,
+                "end": 1.0,
+            },
+        )
+        connection.execute(
+            insert_style, {"id": uuid.uuid4().hex, "clip_id": clip_id, **style}
+        )
+
+    invalid_captions = [
+        {"index": 0, "start": 2.0, "end": 3.0},  # duplicate index
+        {"index": -1, "start": 2.0, "end": 3.0},
+        {"index": 1, "start": -1.0, "end": 3.0},
+        {"index": 1, "start": 3.0, "end": 3.0},
+    ]
+    for values in invalid_captions:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_caption,
+                    {"id": uuid.uuid4().hex, "clip_id": clip_id, **values},
+                )
+
+    invalid_styles = [
+        {},  # second style for the clip
+        {"preset": "fancy"},
+        {"position": "left"},
+        {"font_size": 15},
+        {"font_size": 161},
+        {"max_chars": 9},
+        {"max_chars": 81},
+    ]
+    for values in invalid_styles:
+        # Other values are checked on a clip without a style.
+        target = clip_id
+        if values:
+            target = uuid.uuid4().hex
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO clips (id, video_id, start_seconds, end_seconds, "
+                        "title, reason, score, source) VALUES (:id, :video_id, 0, 20, "
+                        "'T', 'R', 0.5, 'heuristic')"
+                    ),
+                    {"id": target, "video_id": video_id},
+                )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    insert_style,
+                    {"id": uuid.uuid4().hex, "clip_id": target, **style, **values},
+                )
+
+
+def test_downgrade_of_caption_migration_keeps_clips(database_url, engine):
+    config = make_config(database_url)
+    command.upgrade(config, "head")
+    command.downgrade(config, "0009")
+
+    table_names = inspect(engine).get_table_names()
+    assert "clip_captions" not in table_names
+    assert "caption_styles" not in table_names
+    assert "clips" in table_names
+
+    command.upgrade(config, "head")
+    assert "clip_captions" in inspect(engine).get_table_names()
+
+
 def test_env_reads_database_url_from_settings(database_url, engine, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", database_url)
 

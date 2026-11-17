@@ -48,6 +48,19 @@ DEFAULT_CLIP_KEYWORDS = (
     "tip",
 )
 
+# Fonts captions may use (see app/captions/styles.py). The first one is the
+# default. Names may only contain letters, digits, spaces, "_" and "-", so a
+# font name can never break out of an ASS style line.
+DEFAULT_CAPTION_FONTS = (
+    "Arial",
+    "Roboto",
+    "Open Sans",
+    "Montserrat",
+    "Inter",
+    "Bebas Neue",
+)
+CAPTION_FONT_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,63}")
+
 # Razorpay plan ids look like "plan_00000000000001".
 RAZORPAY_PLAN_ID_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
 
@@ -229,6 +242,39 @@ class Settings(BaseSettings):
     # estimated cost per detection run.
     LLM_INPUT_COST_PER_MILLION_TOKENS: float | None = Field(default=None, ge=0)
     LLM_OUTPUT_COST_PER_MILLION_TOKENS: float | None = Field(default=None, ge=0)
+
+    # Fonts captions may use, comma-separated in the environment; the first is
+    # the default. Each name is 1-64 characters of A-Z a-z 0-9, space, "_"
+    # and "-", starting with a letter or digit; the list must not be empty.
+    CAPTION_FONTS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_CAPTION_FONTS)
+    )
+
+    @field_validator("CAPTION_FONTS", mode="before")
+    @classmethod
+    def _split_caption_fonts(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.split(",")
+        return value
+
+    @field_validator("CAPTION_FONTS", mode="after")
+    @classmethod
+    def _validate_caption_fonts(cls, value: list[str]) -> list[str]:
+        fonts: list[str] = []
+        for name in value:
+            name = " ".join(name.split())
+            if not name:
+                continue
+            if not CAPTION_FONT_NAME_PATTERN.fullmatch(name):
+                raise ValueError(
+                    "CAPTION_FONTS entries must be 1-64 characters of "
+                    "A-Z a-z 0-9, space, _ and -."
+                )
+            if name.casefold() not in (font.casefold() for font in fonts):
+                fonts.append(name)
+        if not fonts:
+            raise ValueError("CAPTION_FONTS must name at least one font.")
+        return fonts
 
     @field_validator("CLIP_DETECTOR", mode="before")
     @classmethod
