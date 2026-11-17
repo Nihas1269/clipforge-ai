@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from app.models.video import Video
 
 TITLE_MAX_LENGTH = 200
+DETECTOR_VERSION_MAX_LENGTH = 50
+DETECTOR_MODEL_MAX_LENGTH = 100
+PROMPT_VERSION_MAX_LENGTH = 50
 
 
 def _utcnow() -> datetime:
@@ -35,6 +38,21 @@ class ClipStatus(str, enum.Enum):
     SUGGESTED = "suggested"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+
+
+# Review decisions a user may make. `suggested` belongs to the detector: a
+# clip never goes back to it, and re-detection replaces only clips that are
+# still suggested. Keeping the same status is always allowed (a no-op).
+ALLOWED_CLIP_STATUS_TRANSITIONS: dict[ClipStatus, frozenset[ClipStatus]] = {
+    ClipStatus.SUGGESTED: frozenset({ClipStatus.ACCEPTED, ClipStatus.REJECTED}),
+    ClipStatus.ACCEPTED: frozenset({ClipStatus.REJECTED}),
+    ClipStatus.REJECTED: frozenset({ClipStatus.ACCEPTED}),
+}
+
+
+def is_allowed_clip_status_change(current: ClipStatus, target: ClipStatus) -> bool:
+    """Return True if a clip may move from `current` to `target`."""
+    return current is target or target in ALLOWED_CLIP_STATUS_TRANSITIONS[current]
 
 
 class ClipSource(str, enum.Enum):
@@ -96,6 +114,17 @@ class Clip(Base):
             validate_strings=True,
             values_callable=_enum_values,
         )
+    )
+    # Provenance of detected clips: the detector version and, for model-based
+    # detectors, the model and prompt version. NULL for manual clips.
+    detector_version: Mapped[str | None] = mapped_column(
+        String(DETECTOR_VERSION_MAX_LENGTH)
+    )
+    detector_model: Mapped[str | None] = mapped_column(
+        String(DETECTOR_MODEL_MAX_LENGTH)
+    )
+    prompt_version: Mapped[str | None] = mapped_column(
+        String(PROMPT_VERSION_MAX_LENGTH)
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()

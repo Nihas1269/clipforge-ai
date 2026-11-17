@@ -111,7 +111,7 @@ Copy-Item .env.example .env
 | `CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS` | `15` / `90`    | Shortest / longest suggested clip (at most 600; min must not exceed max). |
 | `CLIP_MAX_CLIPS`              | `10`                     | Most clips suggested per video (1-50).                       |
 | `CLIP_KEYWORDS`               | built-in list            | Comma-separated words or phrases the heuristic clip detector rewards (see Clips below). |
-| `CLIP_DETECTOR`               | `heuristic`              | `heuristic` or `llm` (falls back to `heuristic` when unconfigured or failing; see Clips below). |
+| `CLIP_DETECTOR`               | `heuristic`              | Detector run by the clip detection job: `heuristic` or `llm` (falls back to `heuristic` when unconfigured or failing; see Clips below). |
 | `LLM_PROVIDER`                | unset                    | `openai_compatible` or `anthropic`. Required for `CLIP_DETECTOR=llm`. |
 | `LLM_API_BASE_URL`            | unset                    | API base URL including the version path (e.g. `.../v1`).     |
 | `LLM_API_KEY`                 | unset                    | API key. Required unless the URL is a loopback host.         |
@@ -649,7 +649,10 @@ arrives after the final cancellation check.
 owner, so ownership is always checked through the video), `start_seconds`,
 `end_seconds` (source-video seconds), `title`, `reason`, `score`, `status`
 (`suggested` (default), `accepted`, `rejected`), `source` (`heuristic`,
-`llm`, `manual`), `created_at` and `updated_at`. `CHECK` constraints require
+`llm`, `manual`), the provenance columns `detector_version`,
+`detector_model` and `prompt_version` (migration `0009`; set for detected
+clips, e.g. `heuristic-1`, and `NULL` for manual clips), `created_at` and
+`updated_at`. `CHECK` constraints require
 `start_seconds >= 0`, `end_seconds > start_seconds` and `0 <= score <= 1`;
 the index `ix_clips_video_id_start_seconds` loads a video's clips in timeline
 order. Deleting a video deletes its clips (`delete_video` also deletes them
@@ -738,9 +741,88 @@ explicitly).
   `llm_request_completed` or `llm_request_failed` (status, category). API
   keys, prompts, transcript text, titles and model answers are never logged.
 
-Limitations: no job or endpoint runs clip detection or stores clips yet.
-The LLM detector is tested only with mocks (`httpx.MockTransport`), never
-against a real provider, and its clip quality depends on the model. Chunks do
+### Clip detection jobs
+
+`POST /api/v1/videos/{id}/clips/detect` (no body) queues the
+`clip_detection` job `app.worker.clip_detection.detect_clips` and returns
+`202 {job_id, status}`; poll `GET /api/v1/jobs/{job_id}`. It returns `409
+video_not_ready` unless the video is `ready` with a duration, `409
+transcript_required` when the video has no transcript, `409
+clip_detection_in_progress` while a detection job for the video is queued or
+running, and `503 queue_unavailable` when the job cannot be published. The
+payload is `{"video_id"}` and the idempotency key is the video id, so at most
+one detection job per video is active and two jobs never overwrite each
+other (3 attempts, soft/hard time limit 600/660 s).
+
+The job (`run_clip_detection`) loads the transcript, runs the configured
+detector with the `CLIP_*` limits, validates the result again with
+`validate_candidates()` (whatever the detector: `0 <= start < end <=
+duration`, length limits, no overlaps), and then, **in one transaction** with
+the video row locked, deletes the video's detected clips that are still
+`suggested` and inserts the new suggestions
+(`app/repositories/clips.py::replace_suggestions`). Accepted, rejected and
+manual clips are never changed. A new suggestion is skipped when it overlaps
+an accepted or manual clip, or has the same range as a rejected clip, so
+re-detection does not repeat a decision already made. Until the save
+commits the previous suggestions stay as they were; a failure is rolled
+back, and a cancelled job saves nothing. Each detected clip stores the
+provenance of the detector that actually produced it: `source` and
+`detector_version` (`heuristic` / `heuristic-1`), or for LLM clips `llm`,
+`llm`, the model (`detector_model`) and `prompt_version`. When the LLM
+detector falls back (its `last_run` reports `fallback_used`), the clips are
+recorded as `heuristic` clips without model or prompt version. An unknown
+`CLIP_DETECTOR` name does not fail the job: `get_clip_detector()` logs
+`clip_detector_unknown` and the heuristic detector runs.
+
+Failure messages shown on the job: "The video has no transcript. Transcribe
+it first.", "The video is not ready for clip detection.", "Clip detection is
+not available on the server." (the detector reports no detected-clip
+source), "Clip detection
+returned an invalid result." and "The video changed while clips were being
+detected. Try again."; they never contain transcript text. Only `OSError`s
+from a detector (network/timeouts of a remote detector) are retried.
+Log events: `clip_detection_requested`, `clip_detection_rejected`,
+`clip_detection_started`, `clip_suggestions_replaced`,
+`clip_detection_saved` (ids and counts only).
+
+### Reviewing clips
+
+All endpoints require authentication; clips are reached only through a
+video owned by the current user, so another user's video or clip is `404
+not_found` (`get_owned_video` / `get_owned_clip`).
+
+- `GET /videos/{id}/clips?status=` — `{items, total}`, ordered by `score`
+  (highest first), then `start_seconds`, `end_seconds` and `id`; `status`
+  optionally filters by `suggested`, `accepted` or `rejected`.
+- `POST /videos/{id}/clips` `{start_seconds, end_seconds, title?}` — creates
+  a manual clip (`201`): source `manual`, status `accepted`, score `1`,
+  reason "Created manually.", and the title "Clip at m:ss" when none is
+  given.
+- `PATCH /clips/{clip_id}` `{start_seconds?, end_seconds?, title?, status?}` —
+  only the fields sent change; an empty body or a `null` field is `422`.
+- `DELETE /clips/{clip_id}` — `204`.
+
+Times are numbers (not strings) of source-video seconds. A new or changed
+range must satisfy `0 <= start < end <= duration` (`422
+invalid_clip_bounds`) and last between `CLIP_MIN_SECONDS` and
+`CLIP_MAX_SECONDS` (`422 invalid_clip_length`); the video must be `ready`
+(`409 video_not_ready`). Titles have control characters removed and
+whitespace collapsed and must be 1-200 characters. Status changes
+(`ALLOWED_CLIP_STATUS_TRANSITIONS` in `app/models/clip.py`):
+
+| From        | To                      |
+| ----------- | ----------------------- |
+| `suggested` | `accepted`, `rejected`  |
+| `accepted`  | `rejected`              |
+| `rejected`  | `accepted`              |
+
+Keeping the same status is allowed; anything else (including back to
+`suggested`) is `409 invalid_status_transition`. A `PATCH` locks the video
+row like the detection job, so it cannot interleave with a replacement; a
+clip replaced meanwhile is `404`.
+
+Limitations: the LLM detector is tested only with mocks
+(`httpx.MockTransport`), never against a real provider, and its clip quality depends on the model. Chunks do
 not overlap, so a moment spanning a chunk boundary cannot be suggested, and
 each chunk is judged without the rest of the video's context. Prompt
 injection is mitigated (data-only framing, escaping, strict validation) but
@@ -749,8 +831,10 @@ suggested and what their titles say. Token usage depends on the provider
 reporting it; the cost estimate uses the configured prices only.
 The heuristic only sees the transcript text (no audio or visual signals), so
 its scores reflect wording, not actual interest; keywords are matched within
-a single segment, and the default keyword list is English. A `Clip` row
-records its `source` but not a detector, model or prompt version.
+a single segment, and the default keyword list is English. Adjusting the
+range or title of a clip that is still `suggested` does not keep it: accept
+it, or the next detection replaces it. Manual clips may overlap other clips.
+The row lock has no effect on SQLite (tests), only on PostgreSQL.
 
 ## Billing: plans, subscriptions and usage
 
@@ -1051,7 +1135,8 @@ logs. A queued job whose message is lost inside Redis (for example after
 Redis data loss) stays queued; there is no automatic re-publishing. Stale
 running jobs are failed, not retried. A running task is not forcibly stopped
 on cancellation. Jobs are queued by the upload endpoint (metadata
-extraction) and `POST /videos/{id}/transcription`; no API endpoint cancels
+extraction), `POST /videos/{id}/transcription` and
+`POST /videos/{id}/clips/detect`; no API endpoint cancels
 them yet.
 
 ## Media metadata extraction
@@ -1284,6 +1369,11 @@ root and is not versioned.
 | GET    | `/api/v1/videos/{id}/transcript/search` | — (query `q` 1-200 chars, `limit` 1-500) | `200` `{query, total, items: [segment]}`; `401`; `404`; `422` |
 | GET    | `/api/v1/videos/{id}/transcript.srt` | —                       | `200` SubRip download; `401`; `404` (also `transcript_not_found`)       |
 | GET    | `/api/v1/videos/{id}/transcript.vtt` | —                       | `200` WebVTT download; `401`; `404` (also `transcript_not_found`)       |
+| POST   | `/api/v1/videos/{id}/clips/detect` | —                         | `202` `{job_id, status}`; `401`; `403` untrusted origin (cookie auth); `404`; `409` `video_not_ready` / `transcript_required` / `clip_detection_in_progress`; `503` job could not be queued |
+| GET    | `/api/v1/videos/{id}/clips` | — (query `status` optional)      | `200` `{items: [clip], total}` by score, then start; `401`; `404`; `422` invalid status |
+| POST   | `/api/v1/videos/{id}/clips` | `{start_seconds, end_seconds, title?}` | `201` manual clip; `401`; `404`; `409` `video_not_ready`; `422` invalid range, length, title or field |
+| PATCH  | `/api/v1/clips/{clip_id}` | `{start_seconds?, end_seconds?, title?, status?}` | `200` clip; `401`; `404` unknown or another user's clip; `409` `invalid_status_transition` / `video_not_ready`; `422` |
+| DELETE | `/api/v1/clips/{clip_id}` | —                                  | `204`; `401`; `404` |
 | GET    | `/api/v1/jobs/{id}`     | —                                    | `200` `{id, job_type, status, video_id, attempts, max_attempts, error_message, created_at, started_at, finished_at}`; `401`; `404` unknown or another user's job; `422` invalid id |
 
 The auth endpoints also return `403` (`csrf_failed`) for requests from an

@@ -203,7 +203,8 @@ class Settings(BaseSettings):
         default_factory=lambda: list(DEFAULT_CLIP_KEYWORDS)
     )
 
-    # Clip detector: "heuristic" (default, offline) or "llm". A plain string so
+    # Clip detector used by the clip_detection job: "heuristic" (default,
+    # offline) or "llm". A plain string so
     # an unknown name does not stop the app from starting; get_clip_detector()
     # logs a warning and uses the heuristic detector instead. "llm" falls back
     # to the heuristic detector when it is unconfigured or fails.

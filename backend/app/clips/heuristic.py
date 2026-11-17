@@ -109,6 +109,8 @@ class HeuristicClipDetector:
     """
 
     name = "heuristic"
+    # Stored with every clip it suggests; bump it when the scoring changes.
+    version = "heuristic-1"
 
     def __init__(self, keywords: Iterable[str] | None = None) -> None:
         if keywords is None:
