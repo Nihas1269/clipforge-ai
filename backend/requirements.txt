@@ -21,3 +21,7 @@ dnspython==2.9.2
 boto3==1.40.0
 python-multipart==0.0.31
 celery[redis]==5.5.3
+# Face tracking for reframing (app/reframe/face_tracking.py). Imported lazily;
+# without it face mode falls back to a center crop.
+opencv-python-headless==4.12.0.88
+numpy==2.2.6
